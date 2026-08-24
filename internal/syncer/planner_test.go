@@ -52,4 +52,19 @@ func TestBuildPlanPreservesConflict(t *testing.T) {
 	if len(plan.ServerSends) != 2 {
 		t.Fatalf("both conflict versions must be returned: %#v", plan.ServerSends)
 	}
+	if len(plan.ConflictDetails) != 1 || plan.ConflictDetails[0].Kind != "modify-modify" {
+		t.Fatalf("conflict details missing: %#v", plan.ConflictDetails)
+	}
+}
+
+func TestBuildPlanTreatsModifyDeleteAsConflict(t *testing.T) {
+	baseline := []model.Entry{entry("notes.txt", "old")}
+	client := []model.Entry{entry("notes.txt", "changed")}
+	plan := BuildPlan(nil, client, baseline, "laptop", time.Unix(0, 0))
+	if len(plan.Conflicts) != 1 || plan.ConflictDetails[0].Kind != "delete-modify" {
+		t.Fatalf("modify/delete conflict was not recorded: %#v", plan)
+	}
+	if len(plan.ClientSends) != 1 || plan.ClientSends[0].Dest != "notes.txt" {
+		t.Fatalf("surviving content must be preserved: %#v", plan)
+	}
 }

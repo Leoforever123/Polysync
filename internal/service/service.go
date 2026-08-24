@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"polysync/internal/discovery"
 	"polysync/internal/model"
 	"polysync/internal/store"
 )
@@ -16,23 +18,32 @@ import (
 var ErrBusy = errors.New("sync already in progress")
 
 type Service struct {
-	store      *store.Store
-	mu         sync.RWMutex
-	statuses   map[string]model.RuntimeStatus
-	activities []model.Activity
-	locks      map[string]*sync.Mutex
-	listener   net.Listener
-	listenPort int
-	wg         sync.WaitGroup
+	store            *store.Store
+	mu               sync.RWMutex
+	statuses         map[string]model.RuntimeStatus
+	activities       []model.Activity
+	locks            map[string]*sync.Mutex
+	listener         net.Listener
+	listenPort       int
+	wg               sync.WaitGroup
+	discovery        *discovery.Service
+	certificate      tls.Certificate
+	pairingRequests  map[string]pendingPair
+	outboundPairs    map[string]outboundPair
+	shareInvitations map[string]model.ShareInvitation
 }
 
 func New(dataStore *store.Store) *Service {
 	service := &Service{
 		store: dataStore, statuses: make(map[string]model.RuntimeStatus), locks: make(map[string]*sync.Mutex),
+		pairingRequests: make(map[string]pendingPair), outboundPairs: make(map[string]outboundPair), shareInvitations: make(map[string]model.ShareInvitation),
 	}
 	for _, share := range dataStore.Config().Shares {
 		service.statuses[share.ID] = model.RuntimeStatus{ShareID: share.ID, State: "idle"}
 		service.locks[share.ID] = &sync.Mutex{}
+	}
+	for _, invitation := range dataStore.Config().ShareInvitations {
+		service.shareInvitations[invitation.ID] = invitation
 	}
 	return service
 }
@@ -41,6 +52,11 @@ func (s *Service) Store() *store.Store { return s.store }
 
 func (s *Service) Start(ctx context.Context) error {
 	config := s.store.Config()
+	certificate, err := s.identityCertificate()
+	if err != nil {
+		return err
+	}
+	s.certificate = certificate
 	listener, err := net.Listen("tcp", config.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", config.ListenAddr, err)
@@ -50,6 +66,13 @@ func (s *Service) Start(ctx context.Context) error {
 		s.listenPort = address.Port
 	}
 	s.log("info", "", fmt.Sprintf("TCP 同步服务已监听 %s", listener.Addr()))
+	discoveryService, discoveryErr := discovery.Start(ctx, config.DeviceID, config.DeviceName, config.IdentityPublicKey, s.listenPort)
+	if discoveryErr != nil {
+		s.log("error", "", "mDNS 发现不可用: "+discoveryErr.Error())
+	} else {
+		s.discovery = discoveryService
+		s.log("info", "", "mDNS 设备发现已启动")
+	}
 
 	s.wg.Add(2)
 	go s.acceptLoop(ctx)
@@ -58,6 +81,9 @@ func (s *Service) Start(ctx context.Context) error {
 }
 
 func (s *Service) Stop() {
+	if s.discovery != nil {
+		s.discovery.Close()
+	}
 	if s.listener != nil {
 		_ = s.listener.Close()
 	}
@@ -151,7 +177,11 @@ func (s *Service) acceptLoop(ctx context.Context) {
 		go func() {
 			defer s.wg.Done()
 			defer connection.Close()
-			s.handleConnection(ctx, connection)
+			tlsConnection := tls.Server(connection, s.serverTLSConfig())
+			if err := tlsConnection.HandshakeContext(ctx); err != nil {
+				return
+			}
+			s.handleConnection(ctx, tlsConnection)
 		}()
 	}
 }
@@ -168,7 +198,7 @@ func (s *Service) autoLoop(ctx context.Context) {
 			config := s.store.Config()
 			statuses := s.Statuses()
 			for _, share := range config.Shares {
-				if !share.AutoSync || share.PeerAddress == "" {
+				if !share.AutoSync || share.State != "active" || share.PeerDeviceID == "" {
 					continue
 				}
 				interval := time.Duration(share.IntervalSeconds) * time.Second

@@ -128,6 +128,43 @@ func DeleteFile(root, relative, historyRoot string) error {
 	return nil
 }
 
+func WriteResolvedFile(root, relative, historyRoot string, data []byte, mode os.FileMode) error {
+	destination, err := SecureJoin(root, relative)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		return err
+	}
+	if err := rejectSymlinkPath(root, destination, true); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(destination), ".polysync-part-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, mode&0o777); err != nil && !errors.Is(err, os.ErrPermission) {
+		return err
+	}
+	if err := archiveExisting(destination, relative, historyRoot); err != nil {
+		return err
+	}
+	return replaceFile(tmpPath, destination)
+}
+
 func replaceFile(source, destination string) error {
 	if err := os.Rename(source, destination); err == nil {
 		return nil

@@ -2,10 +2,7 @@ package protocol
 
 import (
 	"bufio"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +21,7 @@ type Hello struct {
 	DeviceName string `json:"deviceName"`
 	ListenPort int    `json:"listenPort"`
 	Manual     bool   `json:"manual"`
+	Operation  string `json:"operation,omitempty"`
 }
 
 type Challenge struct {
@@ -34,14 +32,16 @@ type Challenge struct {
 }
 
 type SyncRequest struct {
-	Type     string        `json:"type"`
-	Auth     string        `json:"auth"`
-	Manifest []model.Entry `json:"manifest"`
+	Type              string        `json:"type"`
+	Auth              string        `json:"auth"`
+	Manifest          []model.Entry `json:"manifest"`
+	ResolvedConflicts []string      `json:"resolvedConflicts,omitempty"`
 }
 
 type PlanMessage struct {
-	Type string     `json:"type"`
-	Plan model.Plan `json:"plan"`
+	Type              string     `json:"type"`
+	Plan              model.Plan `json:"plan"`
+	ResolvedConflicts []string   `json:"resolvedConflicts,omitempty"`
 }
 
 type FileHeader struct {
@@ -71,6 +71,55 @@ type Result struct {
 	Sent      int    `json:"sent,omitempty"`
 	Received  int    `json:"received,omitempty"`
 	Conflicts int    `json:"conflicts,omitempty"`
+}
+
+type PairRequest struct {
+	Type        string `json:"type"`
+	RequestID   string `json:"requestId"`
+	ClientNonce string `json:"clientNonce"`
+	DeviceID    string `json:"deviceId"`
+	DeviceName  string `json:"deviceName"`
+	PublicKey   string `json:"publicKey"`
+}
+
+type PairChallenge struct {
+	Type        string `json:"type"`
+	RequestID   string `json:"requestId"`
+	ServerNonce string `json:"serverNonce"`
+	DeviceID    string `json:"deviceId"`
+	DeviceName  string `json:"deviceName"`
+	PublicKey   string `json:"publicKey"`
+	ExpiresAt   int64  `json:"expiresAt"`
+}
+
+type PairConfirm struct {
+	Type      string `json:"type"`
+	RequestID string `json:"requestId"`
+	Code      string `json:"code"`
+	Signature string `json:"signature"`
+}
+
+type PairResult struct {
+	Type       string `json:"type"`
+	OK         bool   `json:"ok"`
+	Message    string `json:"message,omitempty"`
+	DeviceID   string `json:"deviceId,omitempty"`
+	DeviceName string `json:"deviceName,omitempty"`
+	PublicKey  string `json:"publicKey,omitempty"`
+	Signature  string `json:"signature,omitempty"`
+}
+
+type ShareInvite struct {
+	Type    string `json:"type"`
+	ID      string `json:"id"`
+	ShareID string `json:"shareId"`
+	Name    string `json:"name"`
+}
+
+type ShareAccept struct {
+	Type    string `json:"type"`
+	ID      string `json:"id"`
+	ShareID string `json:"shareId"`
 }
 
 type Framer struct {
@@ -136,19 +185,4 @@ func (f *Framer) CopyTo(writer io.Writer, size int64) error {
 	}
 	_, err := io.CopyN(writer, f.reader, size)
 	return err
-}
-
-func Authentication(secret, nonce, shareID, deviceID string) string {
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(nonce))
-	mac.Write([]byte{0})
-	mac.Write([]byte(shareID))
-	mac.Write([]byte{0})
-	mac.Write([]byte(deviceID))
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
-func VerifyAuthentication(got, secret, nonce, shareID, deviceID string) bool {
-	expected := Authentication(secret, nonce, shareID, deviceID)
-	return hmac.Equal([]byte(got), []byte(expected))
 }

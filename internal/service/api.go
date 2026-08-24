@@ -40,11 +40,26 @@ type shareView struct {
 	IntervalSeconds int                 `json:"intervalSeconds"`
 	PairCode        string              `json:"pairCode"`
 	Status          model.RuntimeStatus `json:"status"`
+	PeerDeviceID    string              `json:"peerDeviceId,omitempty"`
+	State           string              `json:"state"`
+}
+
+type pairedDeviceView struct {
+	model.PairedDevice
+	Online bool `json:"online"`
 }
 
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", s.handleStatus)
+	mux.HandleFunc("POST /api/pair/start", s.handleStartPairing)
+	mux.HandleFunc("POST /api/pair/confirm", s.handleConfirmPairing)
+	mux.HandleFunc("POST /api/pair/requests/{id}/approve", s.handleApprovePairing)
+	mux.HandleFunc("DELETE /api/pair/requests/{id}", s.handleRejectPairing)
+	mux.HandleFunc("POST /api/shares/invite", s.handleInviteShare)
+	mux.HandleFunc("POST /api/share-invitations/{id}/accept", s.handleAcceptInvitation)
+	mux.HandleFunc("GET /api/conflicts/{id}", s.handleConflictContent)
+	mux.HandleFunc("POST /api/conflicts/{id}/resolve", s.handleResolveConflict)
 	mux.HandleFunc("POST /api/shares", s.handleCreateShare)
 	mux.HandleFunc("PUT /api/shares/{id}", s.handleUpdateShare)
 	mux.HandleFunc("DELETE /api/shares/{id}", s.handleDeleteShare)
@@ -58,12 +73,22 @@ func (s *Service) Handler() http.Handler {
 func (s *Service) handleStatus(writer http.ResponseWriter, _ *http.Request) {
 	config := s.store.Config()
 	statuses := s.Statuses()
+	nearby := s.NearbyDevices()
+	online := make(map[string]bool)
+	for _, device := range nearby {
+		online[device.ID] = device.Online
+	}
+	pairedDevices := make([]pairedDeviceView, 0, len(config.PairedDevices))
+	for _, device := range config.PairedDevices {
+		pairedDevices = append(pairedDevices, pairedDeviceView{PairedDevice: device, Online: online[device.ID] || time.Since(device.LastSeen) < 90*time.Second})
+	}
+	conflicts, _ := s.store.Conflicts()
 	shares := make([]shareView, 0, len(config.Shares))
 	for _, share := range config.Shares {
 		shares = append(shares, shareView{
 			ID: share.ID, Name: share.Name, Path: share.Path, PeerAddress: share.PeerAddress,
 			AutoSync: share.AutoSync, IntervalSeconds: share.IntervalSeconds,
-			PairCode: encodePairCode(share), Status: statuses[share.ID],
+			PairCode: encodePairCode(share), Status: statuses[share.ID], PeerDeviceID: share.PeerDeviceID, State: share.State,
 		})
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
@@ -72,7 +97,132 @@ func (s *Service) handleStatus(writer http.ResponseWriter, _ *http.Request) {
 			"addresses": localAddresses(s.listenPort), "platform": runtime.GOOS,
 		},
 		"shares": shares, "activities": s.Activities(), "protocolVersion": model.ProtocolVersion,
+		"nearbyDevices": nearby, "pairedDevices": pairedDevices, "pairingRequests": s.PairingRequests(),
+		"shareInvitations": s.ShareInvitations(), "conflicts": conflicts,
 	})
+}
+
+func (s *Service) handleStartPairing(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		DeviceID string `json:"deviceId"`
+		Address  string `json:"address"`
+	}
+	if err := readJSON(request, &input); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	sessionID, err := s.StartPairing(request.Context(), input.DeviceID, input.Address)
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(writer, http.StatusAccepted, map[string]any{"sessionId": sessionID})
+}
+
+func (s *Service) handleConfirmPairing(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		SessionID string `json:"sessionId"`
+		Code      string `json:"code"`
+	}
+	if err := readJSON(request, &input); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.ConfirmPairing(request.Context(), input.SessionID, strings.TrimSpace(input.Code)); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Service) handleApprovePairing(writer http.ResponseWriter, request *http.Request) {
+	if err := s.ApprovePairingRequest(request.PathValue("id")); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Service) handleRejectPairing(writer http.ResponseWriter, request *http.Request) {
+	s.RejectPairingRequest(request.PathValue("id"))
+	writeJSON(writer, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Service) handleInviteShare(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		DeviceID        string `json:"deviceId"`
+		Name            string `json:"name"`
+		Path            string `json:"path"`
+		AutoSync        bool   `json:"autoSync"`
+		IntervalSeconds int    `json:"intervalSeconds"`
+	}
+	if err := readJSON(request, &input); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	path, err := s.preparePath(input.Path, "")
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		name = filepath.Base(path)
+	}
+	share, err := s.InviteShare(request.Context(), input.DeviceID, name, path, input.AutoSync, normalizedInterval(input.IntervalSeconds))
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, map[string]any{"id": share.ID})
+}
+
+func (s *Service) handleAcceptInvitation(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		Path            string `json:"path"`
+		AutoSync        bool   `json:"autoSync"`
+		IntervalSeconds int    `json:"intervalSeconds"`
+	}
+	if err := readJSON(request, &input); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	path, err := s.preparePath(input.Path, "")
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	share, err := s.AcceptShareInvitation(request.Context(), request.PathValue("id"), path, input.AutoSync, normalizedInterval(input.IntervalSeconds))
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, map[string]any{"id": share.ID})
+}
+
+func (s *Service) handleConflictContent(writer http.ResponseWriter, request *http.Request) {
+	content, err := s.ConflictContent(request.PathValue("id"))
+	if err != nil {
+		writeAPIError(writer, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, content)
+}
+
+func (s *Service) handleResolveConflict(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		Choice  string `json:"choice"`
+		Content string `json:"content"`
+	}
+	if err := readJSON(request, &input); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.ResolveConflict(request.Context(), request.PathValue("id"), input.Choice, input.Content); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Service) handleCreateShare(writer http.ResponseWriter, request *http.Request) {
@@ -89,7 +239,7 @@ func (s *Service) handleCreateShare(writer http.ResponseWriter, request *http.Re
 	interval := normalizedInterval(input.IntervalSeconds)
 	share := model.Share{
 		ID: store.RandomID(), Secret: store.RandomSecret(), Name: strings.TrimSpace(input.Name), Path: path,
-		PeerAddress: strings.TrimSpace(input.PeerAddress), AutoSync: input.AutoSync, IntervalSeconds: interval,
+		PeerAddress: strings.TrimSpace(input.PeerAddress), State: "legacy", AutoSync: input.AutoSync, IntervalSeconds: interval,
 	}
 	if input.PairCode != "" {
 		pair, err := decodePairCode(input.PairCode)
@@ -183,8 +333,8 @@ func (s *Service) handleSyncShare(writer http.ResponseWriter, request *http.Requ
 		writeAPIError(writer, http.StatusNotFound, errors.New("同步文件夹不存在"))
 		return
 	}
-	if share.PeerAddress == "" {
-		writeAPIError(writer, http.StatusBadRequest, errors.New("请先设置对端地址"))
+	if share.State != "active" || share.PeerDeviceID == "" {
+		writeAPIError(writer, http.StatusBadRequest, errors.New("同步空间尚未被已配对设备接受"))
 		return
 	}
 	go func() { _ = s.SyncShare(context.Background(), id, true) }()

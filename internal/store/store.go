@@ -1,11 +1,15 @@
 package store
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -68,6 +72,17 @@ func Open(dir, listenAddr, uiAddr string) (*Store, error) {
 	}
 	if s.config.DeviceName == "" {
 		s.config.DeviceName = runtime.GOOS + "-device"
+	}
+	if err := s.ensureIdentityLocked(); err != nil {
+		return nil, err
+	}
+	for i := range s.config.Shares {
+		if s.config.Shares[i].State == "" {
+			s.config.Shares[i].State = "legacy"
+		}
+	}
+	if err := s.saveLocked(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }
@@ -150,6 +165,205 @@ func (s *Store) SetDeviceName(name string) error {
 	return s.saveLocked()
 }
 
+func (s *Store) Identity() (ed25519.PublicKey, ed25519.PrivateKey, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	publicKey, err := base64.RawStdEncoding.DecodeString(s.config.IdentityPublicKey)
+	if err != nil || len(publicKey) != ed25519.PublicKeySize {
+		return nil, nil, errors.New("invalid device public key")
+	}
+	privateKey, err := base64.RawStdEncoding.DecodeString(s.config.IdentityPrivateKey)
+	if err != nil || len(privateKey) != ed25519.PrivateKeySize {
+		return nil, nil, errors.New("invalid device private key")
+	}
+	return ed25519.PublicKey(publicKey), ed25519.PrivateKey(privateKey), nil
+}
+
+func (s *Store) PairedDevice(id string) (model.PairedDevice, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, device := range s.config.PairedDevices {
+		if device.ID == id {
+			return device, true
+		}
+	}
+	return model.PairedDevice{}, false
+}
+
+func (s *Store) SavePairedDevice(device model.PairedDevice) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.config.PairedDevices {
+		if s.config.PairedDevices[i].ID == device.ID {
+			if device.PairedAt.IsZero() {
+				device.PairedAt = s.config.PairedDevices[i].PairedAt
+			}
+			s.config.PairedDevices[i] = device
+			return s.saveLocked()
+		}
+	}
+	if device.PairedAt.IsZero() {
+		device.PairedAt = time.Now()
+	}
+	s.config.PairedDevices = append(s.config.PairedDevices, device)
+	return s.saveLocked()
+}
+
+func (s *Store) RemovePairedDevice(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, share := range s.config.Shares {
+		if share.PeerDeviceID == id {
+			return errors.New("device still has configured sync folders")
+		}
+	}
+	for i := range s.config.PairedDevices {
+		if s.config.PairedDevices[i].ID == id {
+			s.config.PairedDevices = append(s.config.PairedDevices[:i], s.config.PairedDevices[i+1:]...)
+			return s.saveLocked()
+		}
+	}
+	return fmt.Errorf("paired device %q not found", id)
+}
+
+func (s *Store) SaveShareInvitation(invitation model.ShareInvitation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.config.ShareInvitations {
+		if s.config.ShareInvitations[i].ID == invitation.ID {
+			s.config.ShareInvitations[i] = invitation
+			return s.saveLocked()
+		}
+	}
+	s.config.ShareInvitations = append(s.config.ShareInvitations, invitation)
+	return s.saveLocked()
+}
+
+func (s *Store) RemoveShareInvitation(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.config.ShareInvitations {
+		if s.config.ShareInvitations[i].ID == id {
+			s.config.ShareInvitations = append(s.config.ShareInvitations[:i], s.config.ShareInvitations[i+1:]...)
+			return s.saveLocked()
+		}
+	}
+	return nil
+}
+
+func (s *Store) SaveConflict(conflict model.Conflict) error {
+	dir := filepath.Join(s.dir, "conflicts", safeName(conflict.ShareID))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(conflict, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(filepath.Join(dir, safeName(conflict.ID)+".json"), data, 0o600)
+}
+
+func (s *Store) Conflicts() ([]model.Conflict, error) {
+	root := filepath.Join(s.dir, "conflicts")
+	var result []model.Conflict
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if errors.Is(walkErr, os.ErrNotExist) {
+			return nil
+		}
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".json" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var conflict model.Conflict
+		if err := json.Unmarshal(data, &conflict); err != nil {
+			return err
+		}
+		result = append(result, conflict)
+		return nil
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return result, err
+}
+
+func (s *Store) Conflict(id string) (model.Conflict, bool, error) {
+	conflicts, err := s.Conflicts()
+	if err != nil {
+		return model.Conflict{}, false, err
+	}
+	for _, conflict := range conflicts {
+		if conflict.ID == id {
+			return conflict, true, nil
+		}
+	}
+	return model.Conflict{}, false, nil
+}
+
+func (s *Store) PutObject(root string, entry model.Entry) error {
+	if !validObjectHash(entry.Hash) {
+		return errors.New("invalid object hash")
+	}
+	destination := s.ObjectPath(entry.Hash)
+	if _, err := os.Stat(destination); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+		return err
+	}
+	source := filepath.Join(root, filepath.FromSlash(entry.Path))
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	tmp, err := os.CreateTemp(filepath.Dir(destination), ".object-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	hash := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(tmp, hash), input); err != nil {
+		tmp.Close()
+		return err
+	}
+	if hex.EncodeToString(hash.Sum(nil)) != entry.Hash {
+		tmp.Close()
+		return errors.New("file changed while caching object")
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, destination); err != nil && !errors.Is(err, os.ErrExist) {
+		if _, statErr := os.Stat(destination); statErr != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ObjectPath(hash string) string {
+	if !validObjectHash(hash) {
+		return filepath.Join(s.dir, "objects", "invalid")
+	}
+	return filepath.Join(s.dir, "objects", hash[:2], hash[2:])
+}
+
+func validObjectHash(hash string) bool {
+	if len(hash) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(hash)
+	return err == nil
+}
+
 func (s *Store) LoadBaseline(shareID, peerID string) ([]model.Entry, error) {
 	path := s.baselinePath(shareID, peerID)
 	data, err := os.ReadFile(path)
@@ -191,6 +405,19 @@ func (s *Store) saveLocked() error {
 	return atomicWrite(s.configPath, data, 0o600)
 }
 
+func (s *Store) ensureIdentityLocked() error {
+	if s.config.IdentityPublicKey != "" && s.config.IdentityPrivateKey != "" {
+		return nil
+	}
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	s.config.IdentityPublicKey = base64.RawStdEncoding.EncodeToString(publicKey)
+	s.config.IdentityPrivateKey = base64.RawStdEncoding.EncodeToString(privateKey)
+	return nil
+}
+
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, mode); err != nil {
@@ -226,5 +453,10 @@ func safeName(value string) string {
 func cloneConfig(config model.Config) model.Config {
 	copyConfig := config
 	copyConfig.Shares = append([]model.Share(nil), config.Shares...)
+	copyConfig.PairedDevices = append([]model.PairedDevice(nil), config.PairedDevices...)
+	copyConfig.ShareInvitations = append([]model.ShareInvitation(nil), config.ShareInvitations...)
+	for i := range copyConfig.PairedDevices {
+		copyConfig.PairedDevices[i].Addresses = append([]string(nil), copyConfig.PairedDevices[i].Addresses...)
+	}
 	return copyConfig
 }

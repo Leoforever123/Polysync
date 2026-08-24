@@ -16,6 +16,7 @@
       </a>
       <div class="top-actions">
         <span class="service-state"><i></i>服务在线</span>
+        <button class="button ghost" id="add-device">添加设备</button>
         <button class="button primary" id="add-share">添加同步</button>
       </div>
     </header>
@@ -32,6 +33,17 @@
         </div>
       </section>
 
+      <section class="attention-list" id="attention-list"></section>
+
+      <section class="section-head">
+        <div>
+          <p class="eyebrow">可信连接</p>
+          <h2>设备</h2>
+        </div>
+        <span class="muted" id="device-count"></span>
+      </section>
+      <section class="device-grid" id="device-list" aria-live="polite"></section>
+
       <section class="section-head">
         <div>
           <p class="eyebrow">同步空间</p>
@@ -42,6 +54,14 @@
 
       <section class="share-grid" id="share-list" aria-live="polite">
         <div class="loading-card"><div class="skeleton wide"></div><div class="skeleton"></div></div>
+      </section>
+
+      <section class="conflict-section hidden" id="conflict-section">
+        <div class="section-head compact">
+          <div><p class="eyebrow">需要处理</p><h2>文件冲突</h2></div>
+          <span class="muted" id="conflict-count"></span>
+        </div>
+        <div class="conflict-list" id="conflict-list"></div>
       </section>
 
       <section class="activity-section" id="activity-section">
@@ -69,4 +89,3 @@
   <script src="/app.js" defer></script>
 </body>
 </html>
-

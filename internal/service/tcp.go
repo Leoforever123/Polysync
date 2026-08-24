@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -19,17 +20,18 @@ import (
 const sessionTimeout = 2 * time.Hour
 
 type responseFrame struct {
-	Type             string     `json:"type"`
-	Nonce            string     `json:"nonce"`
-	ServerDeviceID   string     `json:"serverDeviceId"`
-	ServerDeviceName string     `json:"serverDeviceName"`
-	Plan             model.Plan `json:"plan"`
-	OK               bool       `json:"ok"`
-	Code             string     `json:"code"`
-	Message          string     `json:"message"`
-	Sent             int        `json:"sent"`
-	Received         int        `json:"received"`
-	Conflicts        int        `json:"conflicts"`
+	Type              string     `json:"type"`
+	Nonce             string     `json:"nonce"`
+	ServerDeviceID    string     `json:"serverDeviceId"`
+	ServerDeviceName  string     `json:"serverDeviceName"`
+	Plan              model.Plan `json:"plan"`
+	OK                bool       `json:"ok"`
+	Code              string     `json:"code"`
+	Message           string     `json:"message"`
+	Sent              int        `json:"sent"`
+	Received          int        `json:"received"`
+	Conflicts         int        `json:"conflicts"`
+	ResolvedConflicts []string   `json:"resolvedConflicts"`
 }
 
 func (s *Service) SyncShare(ctx context.Context, shareID string, manual bool) error {
@@ -49,14 +51,23 @@ func (s *Service) SyncShare(ctx context.Context, shareID string, manual bool) er
 		status.Message = "正在连接设备…"
 		status.LastAttempt = now
 	})
-	if share.PeerAddress == "" {
-		return s.syncFailed(shareID, errors.New("尚未设置对端地址"))
+	if share.PeerDeviceID == "" {
+		return s.syncFailed(shareID, errors.New("旧版同步空间需要先完成设备配对并重新邀请"))
 	}
-
-	dialer := net.Dialer{Timeout: 8 * time.Second, KeepAlive: 30 * time.Second}
-	connection, err := dialer.DialContext(ctx, "tcp", share.PeerAddress)
+	pairedDevice, paired := s.store.PairedDevice(share.PeerDeviceID)
+	if !paired {
+		return s.syncFailed(shareID, errors.New("对端设备尚未配对"))
+	}
+	address := share.PeerAddress
+	if address == "" {
+		address = pairedAddress(pairedDevice)
+	}
+	if address == "" {
+		return s.syncFailed(shareID, errors.New("配对设备没有可用地址"))
+	}
+	connection, err := s.dialTLS(ctx, address, &pairedDevice)
 	if err != nil {
-		return s.syncFailed(shareID, fmt.Errorf("连接 %s 失败: %w", share.PeerAddress, err))
+		return s.syncFailed(shareID, fmt.Errorf("连接 %s 失败: %w", address, err))
 	}
 	defer connection.Close()
 	_ = connection.SetDeadline(time.Now().Add(sessionTimeout))
@@ -64,7 +75,7 @@ func (s *Service) SyncShare(ctx context.Context, shareID string, manual bool) er
 	config := s.store.Config()
 	hello := protocol.Hello{
 		Type: "hello", Protocol: model.ProtocolVersion, ShareID: share.ID, DeviceID: config.DeviceID,
-		DeviceName: config.DeviceName, ListenPort: s.listenPort, Manual: manual,
+		DeviceName: config.DeviceName, ListenPort: s.listenPort, Manual: manual, Operation: "sync",
 	}
 	if err := framer.WriteJSON(hello); err != nil {
 		return s.syncFailed(shareID, err)
@@ -76,6 +87,10 @@ func (s *Service) SyncShare(ctx context.Context, shareID string, manual bool) er
 	if response.Type != "challenge" {
 		return s.syncFailed(shareID, remoteError(response))
 	}
+	pairedDevice.Name = response.ServerDeviceName
+	pairedDevice.Addresses = []string{address}
+	pairedDevice.LastSeen = time.Now()
+	_ = s.store.SavePairedDevice(pairedDevice)
 
 	s.updateStatus(shareID, func(status *model.RuntimeStatus) {
 		status.Message = "正在扫描文件…"
@@ -85,8 +100,11 @@ func (s *Service) SyncShare(ctx context.Context, shareID string, manual bool) er
 	if err != nil {
 		return s.syncFailed(shareID, err)
 	}
+	if err := s.cacheObjects(share.Path, manifest); err != nil {
+		return s.syncFailed(shareID, err)
+	}
 	request := protocol.SyncRequest{
-		Type: "sync_request", Auth: protocol.Authentication(share.Secret, response.Nonce, share.ID, config.DeviceID), Manifest: manifest,
+		Type: "sync_request", Manifest: manifest, ResolvedConflicts: s.resolvedConflictIDs(share.ID),
 	}
 	if err := framer.WriteJSON(request); err != nil {
 		return s.syncFailed(shareID, err)
@@ -99,6 +117,9 @@ func (s *Service) SyncShare(ctx context.Context, shareID string, manual bool) er
 		return s.syncFailed(shareID, remoteError(response))
 	}
 	plan := response.Plan
+	if err := s.markConflictsResolved(response.ResolvedConflicts); err != nil {
+		return s.syncFailed(shareID, err)
+	}
 	historyRoot := filepath.Join(s.store.Dir(), "history", share.ID)
 	s.updateStatus(shareID, func(status *model.RuntimeStatus) { status.Message = "正在传输文件…" })
 
@@ -131,6 +152,15 @@ func (s *Service) SyncShare(ctx context.Context, shareID string, manual bool) er
 	if err != nil {
 		return s.syncFailed(shareID, err)
 	}
+	if err := s.cacheObjects(share.Path, finalManifest); err != nil {
+		return s.syncFailed(shareID, err)
+	}
+	if err := s.savePlanConflicts(share, plan, false, config.DeviceName, pairedDevice.Name); err != nil {
+		return s.syncFailed(shareID, err)
+	}
+	if err := s.autoResolveConflicts(share.ID, finalManifest); err != nil {
+		return s.syncFailed(shareID, err)
+	}
 	if err := framer.WriteJSON(protocol.Ack{Type: "ack", Manifest: finalManifest}); err != nil {
 		return s.syncFailed(shareID, err)
 	}
@@ -148,7 +178,7 @@ func (s *Service) SyncShare(ctx context.Context, shareID string, manual bool) er
 	return nil
 }
 
-func (s *Service) handleConnection(ctx context.Context, connection net.Conn) {
+func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 	_ = connection.SetDeadline(time.Now().Add(sessionTimeout))
 	framer := protocol.NewFramer(connection)
 	var hello protocol.Hello
@@ -159,9 +189,41 @@ func (s *Service) handleConnection(ctx context.Context, connection net.Conn) {
 		_ = writeError(framer, "protocol", "协议版本不兼容")
 		return
 	}
+	switch hello.Operation {
+	case "identify":
+		config := s.store.Config()
+		_ = framer.WriteJSON(protocol.PairResult{Type: "identify_result", OK: true, DeviceID: config.DeviceID, DeviceName: config.DeviceName, PublicKey: config.IdentityPublicKey})
+		return
+	case "pair_request":
+		s.handlePairRequest(connection, framer, hello)
+		return
+	case "pair_confirm":
+		s.handlePairConfirm(connection, framer, hello)
+		return
+	case "share_invite":
+		s.handleShareInvite(connection, framer, hello)
+		return
+	case "share_accept":
+		s.handleShareAccept(connection, framer, hello)
+		return
+	case "sync":
+	default:
+		_ = writeError(framer, "operation", "未知操作")
+		return
+	}
+	pairedDevice, paired := s.store.PairedDevice(hello.DeviceID)
+	peerKey, peerErr := peerIdentity(connection)
+	if !paired || peerErr != nil || peerKey != pairedDevice.PublicKey {
+		_ = writeError(framer, "unpaired", "设备尚未配对或身份不匹配")
+		return
+	}
 	share, exists := s.store.Share(hello.ShareID)
 	if !exists {
 		_ = writeError(framer, "unknown_share", "此设备未配置该同步文件夹")
+		return
+	}
+	if share.PeerDeviceID != hello.DeviceID || share.State != "active" {
+		_ = writeError(framer, "share_auth", "该设备未获授权访问此同步文件夹")
 		return
 	}
 	nonce := randomNonce()
@@ -175,8 +237,12 @@ func (s *Service) handleConnection(ctx context.Context, connection net.Conn) {
 	if err := framer.ReadJSON(&request); err != nil {
 		return
 	}
-	if request.Type != "sync_request" || !protocol.VerifyAuthentication(request.Auth, share.Secret, nonce, share.ID, hello.DeviceID) {
-		_ = writeError(framer, "auth", "同步码认证失败")
+	if request.Type != "sync_request" {
+		_ = writeError(framer, "auth", "同步请求无效")
+		return
+	}
+	if err := s.markConflictsResolved(request.ResolvedConflicts); err != nil {
+		_ = writeError(framer, "conflict", err.Error())
 		return
 	}
 	s.learnPeer(share, hello, connection.RemoteAddr())
@@ -199,6 +265,11 @@ func (s *Service) handleConnection(ctx context.Context, connection net.Conn) {
 		s.syncFailed(share.ID, err)
 		return
 	}
+	if err := s.cacheObjects(share.Path, serverManifest); err != nil {
+		_ = writeError(framer, "objects", err.Error())
+		s.syncFailed(share.ID, err)
+		return
+	}
 	baseline, err := s.store.LoadBaseline(share.ID, hello.DeviceID)
 	if err != nil {
 		_ = writeError(framer, "state", err.Error())
@@ -207,7 +278,7 @@ func (s *Service) handleConnection(ctx context.Context, connection net.Conn) {
 	}
 	plan := syncer.BuildPlan(serverManifest, request.Manifest, baseline, hello.DeviceName, time.Now())
 	historyRoot := filepath.Join(s.store.Dir(), "history", share.ID)
-	if err := framer.WriteJSON(protocol.PlanMessage{Type: "plan", Plan: plan}); err != nil {
+	if err := framer.WriteJSON(protocol.PlanMessage{Type: "plan", Plan: plan, ResolvedConflicts: s.resolvedConflictIDs(share.ID)}); err != nil {
 		s.syncFailed(share.ID, err)
 		return
 	}
@@ -256,6 +327,21 @@ func (s *Service) handleConnection(ctx context.Context, connection net.Conn) {
 		s.syncFailed(share.ID, err)
 		return
 	}
+	if err := s.cacheObjects(share.Path, finalManifest); err != nil {
+		_ = writeError(framer, "objects", err.Error())
+		s.syncFailed(share.ID, err)
+		return
+	}
+	if err := s.savePlanConflicts(share, plan, true, config.DeviceName, hello.DeviceName); err != nil {
+		_ = writeError(framer, "conflict", err.Error())
+		s.syncFailed(share.ID, err)
+		return
+	}
+	if err := s.autoResolveConflicts(share.ID, finalManifest); err != nil {
+		_ = writeError(framer, "conflict", err.Error())
+		s.syncFailed(share.ID, err)
+		return
+	}
 	if !manifestsEqual(finalManifest, ack.Manifest) {
 		err := errors.New("同步期间文件发生变化，将在下一轮重试")
 		_ = writeError(framer, "changed", err.Error())
@@ -287,6 +373,12 @@ func (s *Service) learnPeer(share model.Share, hello protocol.Hello, remote net.
 		return
 	}
 	peer := net.JoinHostPort(address.IP.String(), fmt.Sprintf("%d", hello.ListenPort))
+	if device, exists := s.store.PairedDevice(hello.DeviceID); exists {
+		device.Name = hello.DeviceName
+		device.Addresses = []string{peer}
+		device.LastSeen = time.Now()
+		_ = s.store.SavePairedDevice(device)
+	}
 	if share.PeerAddress == peer {
 		return
 	}

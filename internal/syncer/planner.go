@@ -63,28 +63,39 @@ func BuildPlan(server, client, baseline []model.Entry, clientName string, now ti
 		case !hasServer && !hasClient:
 			continue
 		default:
-			addConflict(&plan, filePath, s, hasServer, c, hasClient, clientName, now)
+			addConflict(&plan, filePath, s, hasServer, c, hasClient, b, hadBase, clientName, now)
 		}
 	}
 	return plan
 }
 
-func addConflict(plan *Plan, filePath string, server model.Entry, hasServer bool, client model.Entry, hasClient bool, clientName string, now time.Time) {
+func addConflict(plan *Plan, filePath string, server model.Entry, hasServer bool, client model.Entry, hasClient bool, baseline model.Entry, hadBaseline bool, clientName string, now time.Time) {
+	detail := model.PlanConflict{Path: filePath, ServerHash: server.Hash, ClientHash: client.Hash, ServerExists: hasServer, ClientExists: hasClient}
+	if hadBaseline {
+		detail.BaseHash = baseline.Hash
+	}
 	if !hasServer {
+		detail.Kind = "delete-modify"
 		plan.ClientSends = append(plan.ClientSends, transfer(client, filePath))
-		return
-	}
-	if !hasClient {
+	} else if !hasClient {
+		detail.Kind = "modify-delete"
 		plan.ServerSends = append(plan.ServerSends, transfer(server, filePath))
-		return
+	} else {
+		if hadBaseline {
+			detail.Kind = "modify-modify"
+		} else {
+			detail.Kind = "add-add"
+		}
+		conflictPath := conflictName(filePath, clientName, client.Hash, now)
+		detail.ConflictCopyPath = conflictPath
+		clientCopy := transfer(client, conflictPath)
+		clientCopy.Source = filePath
+		plan.ClientSends = append(plan.ClientSends, clientCopy)
+		plan.ServerSends = append(plan.ServerSends, transfer(server, filePath))
+		plan.ServerSends = append(plan.ServerSends, Transfer{Source: conflictPath, Dest: conflictPath, Size: client.Size, Hash: client.Hash, Mode: client.Mode, ModTime: client.ModTime})
 	}
-	conflictPath := conflictName(filePath, clientName, client.Hash, now)
-	clientCopy := transfer(client, conflictPath)
-	clientCopy.Source = filePath
-	plan.ClientSends = append(plan.ClientSends, clientCopy)
-	plan.ServerSends = append(plan.ServerSends, transfer(server, filePath))
-	plan.ServerSends = append(plan.ServerSends, Transfer{Source: conflictPath, Dest: conflictPath, Size: client.Size, Hash: client.Hash, Mode: client.Mode, ModTime: client.ModTime})
 	plan.Conflicts = append(plan.Conflicts, filePath)
+	plan.ConflictDetails = append(plan.ConflictDetails, detail)
 }
 
 func changed(current model.Entry, exists bool, baseline model.Entry, hadBaseline bool) bool {

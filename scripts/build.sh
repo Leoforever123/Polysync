@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-VERSION="${1:-0.1.0}"
+VERSION="${1:-0.2.0}"
 PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 DIST_DIR="$PROJECT_ROOT/dist"
 GOCACHE="$PROJECT_ROOT/.cache/go-build"
