@@ -2,6 +2,8 @@
 
 PolySync 是一个面向个人设备的局域网双向文件同步工具。两台设备各自选择一个本地文件夹，通过 TCP 直接交换文件；它支持多个独立同步空间、自动定时同步和手动同步，不依赖云存储或中心服务器。
 
+[官方网站与下载](https://leoforever123.github.io/Polysync/) · [最新版本](https://github.com/Leoforever123/Polysync/releases/latest)
+
 ## 已实现
 
 - Windows、Linux、macOS 使用同一套 Go 核心
