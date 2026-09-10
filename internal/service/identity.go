@@ -56,6 +56,13 @@ func (s *Service) serverTLSConfig() *tls.Config {
 }
 
 func (s *Service) dialTLS(ctx context.Context, address string, expected *model.PairedDevice) (*tls.Conn, error) {
+	if err := s.ctx.Err(); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(s.ctx, cancel)
+	defer stop()
 	config := &tls.Config{
 		Certificates: []tls.Certificate{s.certificate}, MinVersion: tls.VersionTLS13,
 		InsecureSkipVerify: true,

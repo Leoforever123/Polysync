@@ -188,7 +188,7 @@ func (s *Service) ResolveConflict(ctx context.Context, id, choice, merged string
 		return err
 	}
 	s.log("success", share.ID, "已解决冲突 “"+conflict.Path+"”")
-	go func() { _ = s.SyncShare(context.Background(), share.ID, true) }()
+	go func() { _ = s.SyncShare(s.ctx, share.ID, true) }()
 	return nil
 }
 

@@ -18,6 +18,12 @@ import (
 var ErrBusy = errors.New("sync already in progress")
 
 type Service struct {
+	transfers        *transferManager
+	transferConfigMu sync.Mutex
+	trayEnabled      bool
+	ctx              context.Context
+	cancel           context.CancelFunc
+	stopParent       func() bool
 	store            *store.Store
 	mu               sync.RWMutex
 	statuses         map[string]model.RuntimeStatus
@@ -34,7 +40,9 @@ type Service struct {
 }
 
 func New(dataStore *store.Store) *Service {
+	ctx, cancel := context.WithCancel(context.Background())
 	service := &Service{
+		ctx: ctx, cancel: cancel, transfers: newTransferManager(dataStore.Dir()),
 		store: dataStore, statuses: make(map[string]model.RuntimeStatus), locks: make(map[string]*sync.Mutex),
 		pairingRequests: make(map[string]pendingPair), outboundPairs: make(map[string]outboundPair), shareInvitations: make(map[string]model.ShareInvitation),
 	}
@@ -51,6 +59,11 @@ func New(dataStore *store.Store) *Service {
 func (s *Service) Store() *store.Store { return s.store }
 
 func (s *Service) Start(ctx context.Context) error {
+	if err := s.transfers.load(); err != nil {
+		return err
+	}
+	s.stopParent = context.AfterFunc(ctx, s.cancel)
+	ctx = s.ctx
 	config := s.store.Config()
 	certificate, err := s.identityCertificate()
 	if err != nil {
@@ -66,12 +79,15 @@ func (s *Service) Start(ctx context.Context) error {
 		s.listenPort = address.Port
 	}
 	s.log("info", "", fmt.Sprintf("TCP 同步服务已监听 %s", listener.Addr()))
-	discoveryService, discoveryErr := discovery.Start(ctx, config.DeviceID, config.DeviceName, config.IdentityPublicKey, s.listenPort)
-	if discoveryErr != nil {
-		s.log("error", "", "mDNS 发现不可用: "+discoveryErr.Error())
-	} else {
-		s.discovery = discoveryService
-		s.log("info", "", "mDNS 设备发现已启动")
+	// A loopback listener cannot serve peers at the LAN addresses advertised by mDNS.
+	if address, ok := listener.Addr().(*net.TCPAddr); !ok || !address.IP.IsLoopback() {
+		discoveryService, discoveryErr := discovery.Start(ctx, config.DeviceID, config.DeviceName, config.IdentityPublicKey, s.listenPort)
+		if discoveryErr != nil {
+			s.log("error", "", "mDNS 发现不可用: "+discoveryErr.Error())
+		} else {
+			s.discovery = discoveryService
+			s.log("info", "", "mDNS 设备发现已启动")
+		}
 	}
 
 	s.wg.Add(2)
@@ -81,6 +97,12 @@ func (s *Service) Start(ctx context.Context) error {
 }
 
 func (s *Service) Stop() {
+	s.mu.Lock()
+	s.cancel()
+	s.mu.Unlock()
+	if s.stopParent != nil {
+		s.stopParent()
+	}
 	if s.discovery != nil {
 		s.discovery.Close()
 	}
@@ -88,6 +110,11 @@ func (s *Service) Stop() {
 		_ = s.listener.Close()
 	}
 	s.wg.Wait()
+	for _, task := range s.transfers.List() {
+		if transferActive(task.State) {
+			_ = s.transfers.Cancel(task.ID)
+		}
+	}
 }
 
 func (s *Service) ListenPort() int { return s.listenPort }
@@ -177,6 +204,8 @@ func (s *Service) acceptLoop(ctx context.Context) {
 		go func() {
 			defer s.wg.Done()
 			defer connection.Close()
+			stopClose := context.AfterFunc(ctx, func() { _ = connection.Close() })
+			defer stopClose()
 			tlsConnection := tls.Server(connection, s.serverTLSConfig())
 			if err := tlsConnection.HandshakeContext(ctx); err != nil {
 				return
@@ -233,4 +262,10 @@ func listenPort(address string) int {
 	}
 	port, _ := strconv.Atoi(portText)
 	return port
+}
+
+func (s *Service) SetTrayEnabled(enabled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.trayEnabled = enabled
 }

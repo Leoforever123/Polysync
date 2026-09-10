@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>PolySync</title>
-  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/transfer.css">
 </head>
 <body>
   <div class="shell">
@@ -21,12 +21,19 @@
       </div>
     </header>
 
+    <nav class="workspace-nav" id="workspace-nav" aria-label="工作空间">
+      <div><button data-workspace="sync" aria-current="true">同步</button><button data-workspace="transfer" aria-current="false">随传 <span aria-hidden="true">↗</span></button></div>
+      <button class="button ghost small" id="help-tour">使用引导</button>
+    </nav>
+    <aside class="tour-invite" id="tour-invite" hidden><div><strong>第一次见面，花一分钟认识 PolySync。</strong><p>跟随 5 个小提示，找到你的文件流动方式。</p></div><div><button class="button ghost small" id="tour-dismiss">以后再说</button><button class="button primary small" id="tour-start">带我看看</button></div></aside>
     <main>
-      <section class="hero">
+    <div id="sync-workspace">
+      <section class="hero"><div class="hero-art" aria-hidden="true"><i></i><i></i><i></i></div>
         <div>
           <p class="eyebrow">局域网文件同步</p>
-          <h1>文件，在设备间自然流动。</h1>
-          <p class="hero-copy">端到端直连，不经过云端。在线时自动同步，也可以随时手动触发。</p>
+          <h1>让文件，自然流动。</h1>
+          <p class="hero-copy">连接你的设备，让每一份文件保持同步。<br>局域网直连，文件始终在你手中。</p>
+          <p class="background-note" id="background-note"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="13" rx="3"/><path d="M8 21h8m-4-4v4"/></svg><span>关闭页面后继续同步，可从系统托盘打开或退出。</span></p>
         </div>
         <div class="device-card" id="device-card">
           <div class="skeleton wide"></div><div class="skeleton"></div>
@@ -70,10 +77,22 @@
         </div>
         <div class="activity-list" id="activity-list"></div>
       </section>
+    </div>
+    <section id="transfer-workspace" hidden aria-labelledby="transfer-title">
+      <div class="transfer-heading"><div><p class="eyebrow">临时分享 · 轻松送达</p><h1 id="transfer-title">随手一传，即刻到达。</h1><p class="hero-copy">选好文件，交给另一台设备。<br>不用创建同步文件夹，也不用逐次确认。</p></div><div class="transfer-art" aria-hidden="true"><i></i><i></i><span>↗</span></div></div>
+      <div class="transfer-settings-bar"><div><strong id="transfer-receive-status">正在读取接收状态…</strong><small id="transfer-directory-note"></small></div><button class="button ghost small" id="transfer-settings">随传设置</button></div>
+      <p id="transfer-connection-error" class="transfer-message" role="status" hidden></p>
+      <div class="transfer-compose">
+        <div><p class="eyebrow">01 · 选择文件</p><label class="transfer-drop" id="transfer-drop"><span class="transfer-drop-mark" aria-hidden="true">＋</span><strong>把文件拖到这里</strong><span>或点击选择文件 · 支持多选</span><input id="transfer-files" type="file" multiple aria-label="选择要发送的文件"></label><ul class="transfer-selection" id="transfer-selection"></ul></div>
+        <div class="transfer-destination"><p class="eyebrow">02 · 交给谁</p><label for="transfer-peer">接收设备</label><select class="select" id="transfer-peer"><option value="">选择接收设备</option></select><p class="muted" id="transfer-peer-note"></p><button class="button primary" id="transfer-send" disabled>发送文件 <span aria-hidden="true">↗</span></button><button class="button ghost small" id="transfer-upload-cancel" hidden>取消上传</button><p class="muted" id="transfer-upload-note" role="status">每批最多 128 个普通文件，共 16 GiB。文件夹请先打包。</p></div>
+      </div>
+      <div class="section-head"><div><p class="eyebrow">随传工作台</p><h2>接收与发送</h2></div><span class="muted">文件会保留，直到你主动清理</span></div>
+      <div id="transfer-list"></div>
+    </section>
     </main>
 
     <footer>
-      <span>PolySync Protocol v1</span>
+      <span id="protocol-version">PolySync</span>
       <span>TCP 直连 · SHA-256 校验</span>
     </footer>
   </div>
@@ -85,7 +104,17 @@
     </section>
   </div>
 
+  <div id="tour-layer" hidden>
+    <div id="tour-spotlight" aria-hidden="true"></div>
+    <section id="tour-bubble" role="dialog" aria-modal="true" aria-labelledby="tour-title" aria-describedby="tour-copy">
+      <div class="tour-top"><span id="tour-count" class="eyebrow"></span><button class="button ghost small" id="tour-skip">跳过</button></div>
+      <h2 id="tour-title"></h2><p id="tour-copy"></p>
+      <div class="tour-actions"><button class="button ghost" id="tour-prev">上一步</button><button class="button primary" id="tour-next">下一步</button></div>
+    </section>
+  </div>
   <div class="toast" id="toast" role="status"></div>
   <script src="/app.js" defer></script>
+  <script src="/transfer.js" defer></script>
+  <script src="/tour.js" defer></script>
 </body>
 </html>

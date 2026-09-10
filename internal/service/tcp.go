@@ -35,6 +35,14 @@ type responseFrame struct {
 }
 
 func (s *Service) SyncShare(ctx context.Context, shareID string, manual bool) error {
+	s.mu.Lock()
+	if err := s.ctx.Err(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	s.wg.Add(1)
+	s.mu.Unlock()
+	defer s.wg.Done()
 	share, exists := s.store.Share(shareID)
 	if !exists {
 		return fmt.Errorf("sync folder not found")
@@ -70,6 +78,10 @@ func (s *Service) SyncShare(ctx context.Context, shareID string, manual bool) er
 		return s.syncFailed(shareID, fmt.Errorf("连接 %s 失败: %w", address, err))
 	}
 	defer connection.Close()
+	stopClose := context.AfterFunc(ctx, func() { _ = connection.Close() })
+	defer stopClose()
+	stopServiceClose := context.AfterFunc(s.ctx, func() { _ = connection.Close() })
+	defer stopServiceClose()
 	_ = connection.SetDeadline(time.Now().Add(sessionTimeout))
 	framer := protocol.NewFramer(connection)
 	config := s.store.Config()
@@ -190,6 +202,9 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 		return
 	}
 	switch hello.Operation {
+	case "transfer":
+		s.handleTransfer(ctx, connection, framer, hello)
+		return
 	case "identify":
 		config := s.store.Config()
 		_ = framer.WriteJSON(protocol.PairResult{Type: "identify_result", OK: true, DeviceID: config.DeviceID, DeviceName: config.DeviceName, PublicKey: config.IdentityPublicKey})

@@ -2,6 +2,23 @@ const state = { data: null, modal: null, selectedId: null, pairSession: null, to
 const $ = selector => document.querySelector(selector);
 const escapeHTML = (value = "") => String(value).replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
 
+
+function setContent(selector, html) {
+  const node = $(selector);
+  if (node._renderedHTML === html) return;
+  // Do not interrupt a keyboard edit while a background refresh is in flight.
+  if (node.contains(document.activeElement) && document.activeElement.matches("input, select, textarea")) return;
+  node.innerHTML = html;
+  node._renderedHTML = html;
+}
+
+const deviceIllustration = '<svg viewBox="0 0 64 48" fill="none" aria-hidden="true"><circle class="orbit" cx="32" cy="24" r="21" stroke="#aec7ac" stroke-dasharray="3 5"/><rect x="5" y="12" width="28" height="21" rx="6" fill="#d8e6d0" stroke="#698668" stroke-width="1.5"/><path d="M14 38h11m-5-5v5" stroke="#698668" stroke-width="1.5"/><rect x="40" y="16" width="17" height="28" rx="5" fill="#f8faf6" stroke="#698668" stroke-width="1.5"/><path d="M46 39h5" stroke="#698668" stroke-linecap="round"/></svg>';
+const folderIllustration = '<svg viewBox="0 0 64 48" fill="none" aria-hidden="true"><rect x="18" y="4" width="32" height="31" rx="8" fill="#dce8d5" transform="rotate(10 34 20)"/><path d="M7 17a6 6 0 0 1 6-6h11l5 6h22a6 6 0 0 1 6 6v15a6 6 0 0 1-6 6H13a6 6 0 0 1-6-6Z" fill="#e7eedc" stroke="#789371" stroke-width="1.5"/><path d="m26 29 5-5 5 5m-5-5v12" stroke="#53764d" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+function modalFocusable() {
+  return [...$(".modal").querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex="0"]')].filter(node => node.getClientRects().length);
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, { headers: { "Content-Type": "application/json", ...(options.headers || {}) }, ...options });
   const body = await response.json().catch(() => ({}));
@@ -38,21 +55,26 @@ async function refresh(silent = false) {
 
 function render() {
   const { device, shares, activities } = state.data;
+  $("#protocol-version").textContent = `PolySync · Protocol v${state.data.protocolVersion}`;
+  const note = $("#background-note span");
+  if (note) note.textContent = state.data.trayEnabled
+    ? "关闭页面后继续同步，可从系统托盘打开或退出。"
+    : "关闭页面后继续同步，在启动程序的终端按 Ctrl+C 退出。";
   const address = device.addresses.find(item => !item.startsWith("127.")) || device.addresses[0];
-  $("#device-card").innerHTML = `<div class="device-top"><div><div class="device-label">当前设备</div><div class="device-name">${escapeHTML(device.name)}</div></div><div class="device-tools"><div class="platform">${escapeHTML(device.platform)}</div><button class="text-button edit-device">修改名称</button></div></div><div class="address-line"><span>${escapeHTML(address)}</span><button class="text-button" data-copy="${escapeHTML(address)}">复制地址</button></div>`;
+  setContent("#device-card", `<div class="device-top"><div><div class="device-label">当前设备</div><div class="device-name">${escapeHTML(device.name)}</div></div><div class="device-tools"><div class="platform">${escapeHTML(device.platform)}</div><button class="text-button edit-device">修改名称</button></div></div><div class="address-line"><span>${escapeHTML(address)}</span><button class="text-button" data-copy="${escapeHTML(address)}">复制地址</button></div>`);
   renderAttention();
   renderDevices();
   $("#share-count").textContent = `${shares.length} 个文件夹`;
-  $("#share-list").innerHTML = shares.length ? shares.map(shareCard).join("") : emptyShares();
+  setContent("#share-list", shares.length ? shares.map(shareCard).join("") : emptyShares());
   renderConflicts();
-  $("#activity-list").innerHTML = activities.length ? activities.slice(0, 10).map(activityRow).join("") : `<div class="no-activity">设备配对或同步开始后，记录会显示在这里。</div>`;
+  setContent("#activity-list", activities.length ? activities.slice(0, 10).map(activityRow).join("") : `<div class="no-activity">设备配对或同步开始后，记录会显示在这里。</div>`);
 }
 
 function renderAttention() {
   const items = [];
   (state.data.pairingRequests || []).forEach(request => items.push(`<div class="attention-card"><div><strong>${escapeHTML(request.deviceName)} 请求配对</strong><p>${request.code ? "将验证码告诉发起设备，60 秒内有效。" : "确认设备名称无误后允许本次请求。"}</p></div>${request.code ? `<div class="pair-code">${escapeHTML(request.code)}</div>` : `<div class="choice-actions"><button class="button small approve-pair" data-id="${escapeHTML(request.id)}">允许</button><button class="button small danger reject-pair" data-id="${escapeHTML(request.id)}">拒绝</button></div>`}</div>`));
   (state.data.shareInvitations || []).forEach(invite => items.push(`<div class="attention-card"><div><strong>${escapeHTML(invite.deviceName)} 邀请同步“${escapeHTML(invite.name)}”</strong><p>选择一个本地文件夹即可加入，不需要再次验证身份。</p></div><button class="button small accept-invite" data-id="${escapeHTML(invite.id)}">选择文件夹</button></div>`));
-  $("#attention-list").innerHTML = items.join("");
+  setContent("#attention-list", items.join(""));
 }
 
 function renderDevices() {
@@ -60,7 +82,7 @@ function renderDevices() {
   const nearby = (state.data.nearbyDevices || []).filter(device => !device.paired);
   $("#device-count").textContent = `${paired.length} 台已配对 · ${nearby.length} 台附近设备`;
   const cards = [...paired.map(device => peerCard(device, true)), ...nearby.map(device => peerCard(device, false))];
-  $("#device-list").innerHTML = cards.length ? cards.join("") : `<div class="empty"><div><div class="empty-symbol">⌁</div><h3>正在发现附近设备</h3><p>确保两台设备位于同一局域网并已启动 PolySync。</p></div></div>`;
+  setContent("#device-list", cards.length ? cards.join("") : `<div class="empty"><div><div class="empty-symbol">${deviceIllustration}</div><h3>正在发现附近设备</h3><p>确保两台设备位于同一局域网并已启动 PolySync。</p></div></div>`);
 }
 
 function peerCard(device, paired) {
@@ -86,14 +108,14 @@ function shareCard(share) {
 }
 
 function emptyShares() {
-  return `<div class="empty"><div><div class="empty-symbol">◇</div><h3>从第一个同步文件夹开始</h3><p>先配对一台设备，然后发送文件夹同步邀请。</p><button class="button primary" id="empty-add">添加同步文件夹</button></div></div>`;
+  return `<div class="empty"><div><div class="empty-symbol">${folderIllustration}</div><h3>从第一个同步文件夹开始</h3><p>先配对一台设备，然后发送文件夹同步邀请。</p><button class="button primary" id="empty-add">添加同步文件夹</button></div></div>`;
 }
 
 function renderConflicts() {
   const conflicts = (state.data.conflicts || []).filter(item => item.status === "pending");
   $("#conflict-section").classList.toggle("hidden", conflicts.length === 0);
   $("#conflict-count").textContent = `${conflicts.length} 个待解决`;
-  $("#conflict-list").innerHTML = conflicts.map(item => `<div class="conflict-row"><div><div class="conflict-path">${escapeHTML(item.path)}</div><div class="conflict-kind">${escapeHTML(conflictKind(item.kind))} · ${escapeHTML(item.localDevice)} / ${escapeHTML(item.remoteDevice)}</div></div><button class="button small resolve-conflict" data-id="${escapeHTML(item.id)}">查看并合并</button></div>`).join("");
+  setContent("#conflict-list", conflicts.map(item => `<div class="conflict-row"><div><div class="conflict-path">${escapeHTML(item.path)}</div><div class="conflict-kind">${escapeHTML(conflictKind(item.kind))} · ${escapeHTML(item.localDevice)} / ${escapeHTML(item.remoteDevice)}</div></div><button class="button small resolve-conflict" data-id="${escapeHTML(item.id)}">查看并合并</button></div>`).join(""));
 }
 
 function conflictKind(kind) {
@@ -105,10 +127,18 @@ function activityRow(item) {
 }
 
 function openModal(html, mode) {
+  if (!state.modal) state.returnFocus = document.activeElement;
   state.modal = mode;
   $(".modal").classList.toggle("wide-modal", mode === "conflict");
   $("#modal-content").innerHTML = html;
   $("#modal-backdrop").classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+  $(".shell").inert = true;
+  requestAnimationFrame(() => {
+    if (state.modal !== mode) return;
+    const target = $("#modal-content").querySelector("input, select, textarea, button") || $("#close-modal");
+    target?.focus();
+  });
 }
 
 function closeModal() {
@@ -116,6 +146,10 @@ function closeModal() {
   state.modal = null;
   state.selectedId = null;
   $(".modal").classList.remove("wide-modal");
+  document.body.style.overflow = "";
+  $(".shell").inert = false;
+  if (state.returnFocus?.isConnected) state.returnFocus.focus({ preventScroll: true });
+  state.returnFocus = null;
 }
 
 function openNearby() {
@@ -127,7 +161,7 @@ async function beginPair(deviceId, address) {
   try {
     const result = await api("/api/pair/start", { method: "POST", body: JSON.stringify({ deviceId, address }) });
     state.pairSession = result.sessionId;
-    openModal(`<h2 id="modal-title">输入配对验证码</h2><p class="modal-intro">在另一台设备上允许请求，然后输入它显示的六位数字。</p><form id="pair-form"><div class="field"><input id="pair-code-input" class="input pair-entry" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required placeholder="000000"></div><div class="modal-actions"><button class="button ghost" type="button" data-close>取消</button><button class="button primary" type="submit">完成配对</button></div></form>`, "pair");
+    openModal(`<h2 id="modal-title">输入配对验证码</h2><p class="modal-intro">在另一台设备上允许请求，然后输入它显示的六位数字。配对后，设备可直接向你的随传暂存区投递文件；可在随传设置中关闭接收。</p><form id="pair-form"><div class="field"><input id="pair-code-input" class="input pair-entry" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required placeholder="000000"></div><div class="modal-actions"><button class="button ghost" type="button" data-close>取消</button><button class="button primary" type="submit">完成配对</button></div></form>`, "pair");
     $("#pair-code-input").focus();
   } catch (error) { toast(error.message, true); }
 }
@@ -218,6 +252,7 @@ document.addEventListener("change", async event => {
 });
 
 document.addEventListener("submit", async event => {
+  if (!["manual-pair-form", "pair-form", "invite-form", "accept-form", "edit-form", "device-form"].includes(event.target.id)) return;
   event.preventDefault();
   const submit = event.target.querySelector("button[type=submit]");
   submit.disabled = true;
@@ -245,6 +280,15 @@ document.addEventListener("submit", async event => {
 });
 
 $("#modal-backdrop").addEventListener("click", event => { if (event.target.id === "modal-backdrop") closeModal(); });
-document.addEventListener("keydown", event => { if (event.key === "Escape") closeModal(); });
+document.addEventListener("keydown", event => {
+  if (!state.modal) return;
+  if (event.key === "Escape") { event.preventDefault(); closeModal(); return; }
+  if (event.key !== "Tab") return;
+  const elements = modalFocusable();
+  const first = elements[0], last = elements[elements.length - 1];
+  if (!first) return;
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+});
 refresh();
 setInterval(() => refresh(true), 2500);

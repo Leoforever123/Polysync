@@ -35,6 +35,10 @@ func TestPairInviteAndSync(t *testing.T) {
 		right.Stop()
 	}()
 
+	if left.discovery != nil || right.discovery != nil {
+		t.Fatal("loopback listeners must not advertise LAN addresses via mDNS")
+	}
+
 	rightConfig := rightStore.Config()
 	rightAddress := "127.0.0.1:" + intText(right.ListenPort())
 	nearby := model.NearbyDevice{ID: rightConfig.DeviceID, Name: rightConfig.DeviceName, PublicKey: rightConfig.IdentityPublicKey, Addresses: []string{rightAddress}, Online: true}

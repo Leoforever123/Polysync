@@ -31,7 +31,7 @@ func (s *Service) InviteShare(ctx context.Context, deviceID, name, path string, 
 		return model.Share{}, errors.New("配对设备当前没有可用地址")
 	}
 	share := model.Share{ID: store.RandomID(), Name: name, Path: path, PeerDeviceID: deviceID, PeerAddress: address, State: "pending", AutoSync: auto, IntervalSeconds: interval}
-	if err := s.store.AddShare(share); err != nil {
+	if err := s.saveTransferAwareShare(share, false); err != nil {
 		return model.Share{}, err
 	}
 	s.RegisterShare(share.ID)
@@ -85,7 +85,7 @@ func (s *Service) AcceptShareInvitation(ctx context.Context, invitationID, path 
 		address = s.bestDeviceAddress(device)
 	}
 	share := model.Share{ID: invitation.ShareID, Name: invitation.Name, Path: path, PeerDeviceID: invitation.DeviceID, PeerAddress: address, State: "active", AutoSync: auto, IntervalSeconds: interval}
-	if err := s.store.AddShare(share); err != nil {
+	if err := s.saveTransferAwareShare(share, false); err != nil {
 		return model.Share{}, err
 	}
 	s.RegisterShare(share.ID)
@@ -123,7 +123,7 @@ func (s *Service) AcceptShareInvitation(ctx context.Context, invitationID, path 
 	s.mu.Unlock()
 	_ = s.store.RemoveShareInvitation(invitationID)
 	s.log("success", share.ID, "已接受来自 “"+device.Name+"” 的同步邀请")
-	go func() { _ = s.SyncShare(context.Background(), share.ID, true) }()
+	go func() { _ = s.SyncShare(s.ctx, share.ID, true) }()
 	return share, nil
 }
 
@@ -175,7 +175,7 @@ func (s *Service) handleShareAccept(connection *tls.Conn, framer *protocol.Frame
 	}
 	share.State = "active"
 	share.PeerAddress = remoteAddress(connection.RemoteAddr(), hello.ListenPort)
-	if err := s.store.UpdateShare(share); err != nil {
+	if err := s.saveTransferAwareShare(share, true); err != nil {
 		_ = writeError(framer, "share", err.Error())
 		return
 	}

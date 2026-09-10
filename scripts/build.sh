@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-VERSION="${1:-0.2.0}"
+VERSION="${1:-0.3.0}"
 PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 DIST_DIR="$PROJECT_ROOT/dist"
 GOCACHE="$PROJECT_ROOT/.cache/go-build"
@@ -14,7 +14,9 @@ build() {
   extension="$3"
   output="$DIST_DIR/polysync-$target_os-$target_arch$extension"
   echo "Building $output"
-  GOOS="$target_os" GOARCH="$target_arch" go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$output" ./cmd/polysync
+  flags="-s -w -X main.version=$VERSION"
+  if [ "$target_os" = "windows" ]; then flags="$flags -H=windowsgui"; fi
+  GOOS="$target_os" GOARCH="$target_arch" go build -trimpath -ldflags "$flags" -o "$output" ./cmd/polysync
 }
 
 cd "$PROJECT_ROOT"

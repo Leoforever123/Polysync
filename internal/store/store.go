@@ -460,3 +460,13 @@ func cloneConfig(config model.Config) model.Config {
 	}
 	return copyConfig
 }
+
+// LastSyncTime uses the successful baseline's write time without loading a
+// potentially large file manifest on the native menu thread.
+func (s *Store) LastSyncTime(shareID, peerID string) time.Time {
+	info, err := os.Stat(s.baselinePath(shareID, peerID))
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
+}

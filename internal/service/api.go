@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -51,6 +50,7 @@ type pairedDeviceView struct {
 
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
+	s.transferRoutes(mux)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("POST /api/pair/start", s.handleStartPairing)
 	mux.HandleFunc("POST /api/pair/confirm", s.handleConfirmPairing)
@@ -71,6 +71,9 @@ func (s *Service) Handler() http.Handler {
 }
 
 func (s *Service) handleStatus(writer http.ResponseWriter, _ *http.Request) {
+	s.mu.RLock()
+	trayEnabled := s.trayEnabled
+	s.mu.RUnlock()
 	config := s.store.Config()
 	statuses := s.Statuses()
 	nearby := s.NearbyDevices()
@@ -96,7 +99,7 @@ func (s *Service) handleStatus(writer http.ResponseWriter, _ *http.Request) {
 			"id": config.DeviceID, "name": config.DeviceName, "listenPort": s.listenPort,
 			"addresses": localAddresses(s.listenPort), "platform": runtime.GOOS,
 		},
-		"shares": shares, "activities": s.Activities(), "protocolVersion": model.ProtocolVersion,
+		"shares": shares, "activities": s.Activities(), "protocolVersion": model.ProtocolVersion, "trayEnabled": trayEnabled,
 		"nearbyDevices": nearby, "pairedDevices": pairedDevices, "pairingRequests": s.PairingRequests(),
 		"shareInvitations": s.ShareInvitations(), "conflicts": conflicts,
 	})
@@ -264,7 +267,7 @@ func (s *Service) handleCreateShare(writer http.ResponseWriter, request *http.Re
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.store.AddShare(share); err != nil {
+	if err := s.saveTransferAwareShare(share, false); err != nil {
 		writeAPIError(writer, http.StatusConflict, err)
 		return
 	}
@@ -302,7 +305,7 @@ func (s *Service) handleUpdateShare(writer http.ResponseWriter, request *http.Re
 	share.PeerAddress = strings.TrimSpace(input.PeerAddress)
 	share.AutoSync = input.AutoSync
 	share.IntervalSeconds = normalizedInterval(input.IntervalSeconds)
-	if err := s.store.UpdateShare(share); err != nil {
+	if err := s.saveTransferAwareShare(share, true); err != nil {
 		writeAPIError(writer, http.StatusInternalServerError, err)
 		return
 	}
@@ -337,7 +340,7 @@ func (s *Service) handleSyncShare(writer http.ResponseWriter, request *http.Requ
 		writeAPIError(writer, http.StatusBadRequest, errors.New("同步空间尚未被已配对设备接受"))
 		return
 	}
-	go func() { _ = s.SyncShare(context.Background(), id, true) }()
+	go func() { _ = s.SyncShare(s.ctx, id, true) }()
 	writeJSON(writer, http.StatusAccepted, map[string]any{"ok": true})
 }
 
@@ -388,6 +391,13 @@ func (s *Service) preparePath(input, exceptID string) (string, error) {
 		if pathsOverlap(absolute, existing.Path) {
 			return "", fmt.Errorf("不能与已有同步文件夹 “%s” 重叠", existing.Name)
 		}
+	}
+	inbox := s.transfers.Settings().Directory
+	if actual, err := filepath.EvalSymlinks(inbox); err == nil {
+		inbox = actual
+	}
+	if pathsOverlap(absolute, inbox) {
+		return "", errors.New("同步文件夹不能与随传暂存目录重叠")
 	}
 	return filepath.Clean(absolute), nil
 }
