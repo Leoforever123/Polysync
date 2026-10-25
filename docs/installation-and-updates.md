@@ -1,6 +1,6 @@
-# 安装与应用内更新（0.4.0 开发版）
+# 安装与应用内更新（0.4.0）
 
-2026-10-25 更新：当前 Windows 构建已在独立测试产品中通过真实 MSI 安装、更新助手升级/重启、降级拒绝、卸载与数据保留验证，9 月的应用控制阻碍本次没有复现。MSI/EXE 仍未做发布者签名，也尚未正式发布。Ubuntu/Arch 新增原生安装包，更新交给包管理器，见 [Linux 安装说明](linux-installation.md) 和 [本轮验证记录](packaging-verification-2026-10-25.md)。
+2026-10-25 更新：Windows 构建已在独立测试产品中通过真实 MSI 安装、更新助手升级/重启、降级拒绝、卸载与数据保留验证，9 月的应用控制阻碍本次没有复现。MSI/EXE 仍未做发布者签名。Ubuntu/Arch 新增原生安装包，通过官网及 GitHub Release 下载，见 [Linux 安装说明](linux-installation.md) 和 [本轮验证记录](packaging-verification-2026-10-25.md)。v0.3.0 没有应用内安装功能，迁移需手动下载一次 MSI。
 
 ## 使用方式
 

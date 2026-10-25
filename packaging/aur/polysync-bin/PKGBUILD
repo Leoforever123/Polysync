@@ -1,4 +1,4 @@
-# Publication pending: publish the v0.4.0 asset and configure an AUR account.
+# AUR publication pending: configure a maintainer account.
 pkgname=polysync-bin
 pkgver=0.4.0
 pkgrel=1
@@ -22,7 +22,7 @@ sha256sums=('14c351ae454be46215b9ee22ec6a8fadbed27a271ad80b52f928f42cd6e65b84'
             '82eb116a0075f2199f36ca9f6e41b7bcef4c857c10e744017e3891f59d56781c'
             '329bb87e320fe422c61420860b181a08d53eb25c0e705171fc15e00635cada0c')
 source_x86_64=("polysync-${pkgver}-linux-amd64::${url}/releases/download/v${pkgver}/polysync-linux-amd64")
-sha256sums_x86_64=('138d578a7aa19271e8b5dd5e3172bb886ba7658a0674efbdd2c3c131edd1b377')
+sha256sums_x86_64=('6fde633fa9a1073a32fd51b38d0db3f2c705b65b6f0bef89556fbee493d12c06')
 noextract=("polysync-${pkgver}-linux-amd64")
 
 package() {

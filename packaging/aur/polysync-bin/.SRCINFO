@@ -28,6 +28,6 @@ pkgbase = polysync-bin
 	sha256sums = 82eb116a0075f2199f36ca9f6e41b7bcef4c857c10e744017e3891f59d56781c
 	sha256sums = 329bb87e320fe422c61420860b181a08d53eb25c0e705171fc15e00635cada0c
 	source_x86_64 = polysync-0.4.0-linux-amd64::https://github.com/Leoforever123/Polysync/releases/download/v0.4.0/polysync-linux-amd64
-	sha256sums_x86_64 = 138d578a7aa19271e8b5dd5e3172bb886ba7658a0674efbdd2c3c131edd1b377
+	sha256sums_x86_64 = 6fde633fa9a1073a32fd51b38d0db3f2c705b65b6f0bef89556fbee493d12c06
 
 pkgname = polysync-bin
