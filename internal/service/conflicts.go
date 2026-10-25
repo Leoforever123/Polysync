@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,6 +131,14 @@ func (s *Service) ConflictContent(id string) (ConflictContent, error) {
 }
 
 func (s *Service) ResolveConflict(ctx context.Context, id, choice, merged string) error {
+	if err := s.beginSyncWork(); err != nil {
+		return err
+	}
+	defer s.endSyncWork()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(s.ctx, cancel)
+	defer stop()
 	conflict, exists, err := s.store.Conflict(id)
 	if err != nil || !exists {
 		if err != nil {
@@ -143,6 +152,28 @@ func (s *Service) ResolveConflict(ctx context.Context, id, choice, merged string
 	share, exists := s.store.Share(conflict.ShareID)
 	if !exists {
 		return errors.New("同步空间不存在")
+	}
+	lock := s.lockFor(share.ID)
+	if !lock.TryLock() {
+		return ErrBusy
+	}
+	syncAfter := false
+	defer func() {
+		lock.Unlock()
+		if syncAfter {
+			go func() { _ = s.SyncShare(s.ctx, share.ID, true) }()
+		}
+	}()
+	// Re-read under the same lock used by synchronization and other resolutions.
+	conflict, exists, err = s.store.Conflict(id)
+	if err != nil {
+		return err
+	}
+	if !exists || conflict.Status != "pending" {
+		return errors.New("冲突已经解决或不存在")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	historyRoot := filepath.Join(s.store.Dir(), "history", share.ID)
 	switch choice {
@@ -162,11 +193,19 @@ func (s *Service) ResolveConflict(ctx context.Context, id, choice, merged string
 			}
 			break
 		}
-		data, err := os.ReadFile(s.store.ObjectPath(hash))
+		input, err := os.Open(s.store.ObjectPath(hash))
 		if err != nil {
 			return errors.New("冲突版本内容不可用")
 		}
-		if err := syncer.WriteResolvedFile(share.Path, conflict.Path, historyRoot, data, 0o644); err != nil {
+		defer input.Close()
+		info, err := input.Stat()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return errors.New("冲突版本不是普通文件")
+		}
+		if err := syncer.WriteResolvedStream(ctx, share.Path, conflict.Path, historyRoot, input, info.Size(), hash, 0o644); err != nil {
 			return err
 		}
 	case "merged":
@@ -180,7 +219,9 @@ func (s *Service) ResolveConflict(ctx context.Context, id, choice, merged string
 		return errors.New("未知的冲突解决方式")
 	}
 	if conflict.ConflictCopyPath != "" {
-		_ = syncer.DeleteFile(share.Path, conflict.ConflictCopyPath, historyRoot)
+		if err := syncer.DeleteFile(share.Path, conflict.ConflictCopyPath, historyRoot); err != nil {
+			return err
+		}
 	}
 	conflict.Status = "resolved"
 	conflict.ResolvedAt = time.Now()
@@ -188,7 +229,7 @@ func (s *Service) ResolveConflict(ctx context.Context, id, choice, merged string
 		return err
 	}
 	s.log("success", share.ID, "已解决冲突 “"+conflict.Path+"”")
-	go func() { _ = s.SyncShare(s.ctx, share.ID, true) }()
+	syncAfter = true
 	return nil
 }
 
@@ -196,12 +237,17 @@ func (s *Service) readTextObject(hash string) (string, bool) {
 	if hash == "" {
 		return "", true
 	}
-	info, err := os.Stat(s.store.ObjectPath(hash))
+	input, err := os.Open(s.store.ObjectPath(hash))
+	if err != nil {
+		return "", false
+	}
+	defer input.Close()
+	info, err := input.Stat()
 	if err != nil || info.Size() > maxMergeTextSize {
 		return "", false
 	}
-	data, err := os.ReadFile(s.store.ObjectPath(hash))
-	if err != nil || !utf8.Valid(data) || strings.ContainsRune(string(data), '\x00') {
+	data, err := io.ReadAll(io.LimitReader(input, maxMergeTextSize+1))
+	if err != nil || len(data) > maxMergeTextSize || !utf8.Valid(data) || strings.ContainsRune(string(data), '\x00') {
 		return "", false
 	}
 	return string(data), true

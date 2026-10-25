@@ -51,11 +51,15 @@ type pairedDeviceView struct {
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
 	s.transferRoutes(mux)
+	if s.updater != nil {
+		s.updater.Routes(mux)
+	}
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("POST /api/pair/start", s.handleStartPairing)
 	mux.HandleFunc("POST /api/pair/confirm", s.handleConfirmPairing)
 	mux.HandleFunc("POST /api/pair/requests/{id}/approve", s.handleApprovePairing)
 	mux.HandleFunc("DELETE /api/pair/requests/{id}", s.handleRejectPairing)
+	mux.HandleFunc("DELETE /api/paired-devices/{id}", s.handleUnpairDevice)
 	mux.HandleFunc("POST /api/shares/invite", s.handleInviteShare)
 	mux.HandleFunc("POST /api/share-invitations/{id}/accept", s.handleAcceptInvitation)
 	mux.HandleFunc("GET /api/conflicts/{id}", s.handleConflictContent)
@@ -85,7 +89,11 @@ func (s *Service) handleStatus(writer http.ResponseWriter, _ *http.Request) {
 	for _, device := range config.PairedDevices {
 		pairedDevices = append(pairedDevices, pairedDeviceView{PairedDevice: device, Online: online[device.ID] || time.Since(device.LastSeen) < 90*time.Second})
 	}
-	conflicts, _ := s.store.Conflicts()
+	conflicts, err := s.store.Conflicts()
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, fmt.Errorf("冲突记录读取失败，状态不完整：%w", err))
+		return
+	}
 	shares := make([]shareView, 0, len(config.Shares))
 	for _, share := range config.Shares {
 		shares = append(shares, shareView{
@@ -277,6 +285,8 @@ func (s *Service) handleCreateShare(writer http.ResponseWriter, request *http.Re
 }
 
 func (s *Service) handleUpdateShare(writer http.ResponseWriter, request *http.Request) {
+	s.peerControlMu.RLock()
+	defer s.peerControlMu.RUnlock()
 	id := request.PathValue("id")
 	share, exists := s.store.Share(id)
 	if !exists {
@@ -304,6 +314,9 @@ func (s *Service) handleUpdateShare(writer http.ResponseWriter, request *http.Re
 	share.Path = path
 	share.PeerAddress = strings.TrimSpace(input.PeerAddress)
 	share.AutoSync = input.AutoSync
+	if share.State == "unpaired" {
+		share.AutoSync = false
+	}
 	share.IntervalSeconds = normalizedInterval(input.IntervalSeconds)
 	if err := s.saveTransferAwareShare(share, true); err != nil {
 		writeAPIError(writer, http.StatusInternalServerError, err)

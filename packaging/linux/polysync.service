@@ -1,0 +1,14 @@
+[Unit]
+Description=PolySync personal file synchronization
+Documentation=https://github.com/Leoforever123/Polysync
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/polysync -open=false -tray=false
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=default.target

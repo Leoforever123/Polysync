@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"testing"
 	"time"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 func TestNativeTrayDoubleClickAndExit(t *testing.T) {
@@ -54,6 +57,39 @@ func TestNativeTrayDoubleClickAndExit(t *testing.T) {
 	if remaining != 0 {
 		t.Fatal("native tray window retained after exit")
 	}
+}
+
+func TestNativeUpdateMenuDispatch(t *testing.T) {
+	opened := make(chan string, 1)
+	n := &nativeTray{ctx: context.Background(), options: Options{Folders: func() []Folder { return nil }, OpenRoute: func(route string) { opened <- route }}}
+	menu, actions, err := n.buildMenu()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destroyMenu.Call(menu)
+	count, _, _ := user32.NewProc("GetMenuItemCount").Call(menu)
+	for i := uintptr(0); i < count; i++ {
+		var text [128]uint16
+		user32.NewProc("GetMenuStringW").Call(menu, i, uintptr(unsafe.Pointer(&text[0])), uintptr(len(text)), 0x400)
+		if windows.UTF16ToString(text[:]) != "版本与更新…" {
+			continue
+		}
+		id, _, _ := user32.NewProc("GetMenuItemID").Call(menu, i)
+		if actions[id] == nil {
+			t.Fatal("update menu has no action")
+		}
+		actions[id]()
+		select {
+		case route := <-opened:
+			if route != "#updates" {
+				t.Fatal(route)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("update route not dispatched")
+		}
+		return
+	}
+	t.Fatal("update menu missing")
 }
 
 func TestNativeFolderMenuDispatch(t *testing.T) {

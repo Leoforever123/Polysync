@@ -212,15 +212,30 @@ func (s *Store) SavePairedDevice(device model.PairedDevice) error {
 func (s *Store) RemovePairedDevice(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, share := range s.config.Shares {
-		if share.PeerDeviceID == id {
-			return errors.New("device still has configured sync folders")
-		}
-	}
 	for i := range s.config.PairedDevices {
 		if s.config.PairedDevices[i].ID == id {
+			// Retain local workspace access (especially Android export), but never
+			// resume its old relationship merely because the device pairs again.
+			previous := cloneConfig(s.config)
 			s.config.PairedDevices = append(s.config.PairedDevices[:i], s.config.PairedDevices[i+1:]...)
-			return s.saveLocked()
+			for j := range s.config.Shares {
+				if s.config.Shares[j].PeerDeviceID == id {
+					s.config.Shares[j].State = "unpaired"
+					s.config.Shares[j].AutoSync = false
+				}
+			}
+			kept := s.config.ShareInvitations[:0]
+			for _, invitation := range s.config.ShareInvitations {
+				if invitation.DeviceID != id {
+					kept = append(kept, invitation)
+				}
+			}
+			s.config.ShareInvitations = kept
+			if err := s.saveLocked(); err != nil {
+				s.config = previous
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("paired device %q not found", id)

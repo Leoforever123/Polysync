@@ -1,0 +1,449 @@
+// Package mobile embeds the existing PolySync service without a browser, tray,
+// HTTP listener, updater or periodic sync loop. Only metadata crosses the binding.
+package mobile
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+
+	"polysync/internal/discovery"
+	"polysync/internal/model"
+	"polysync/internal/service"
+	"polysync/internal/store"
+)
+
+type Engine struct {
+	discovery *discovery.Service
+	mu        sync.RWMutex
+	svc       *service.Service
+	handler   http.Handler
+	dir       string
+	cancel    context.CancelFunc
+}
+
+func NewEngine() *Engine { return &Engine{} }
+
+// Start creates a fresh service each time; Stop is idempotent.
+func (e *Engine) Start(directory, name, listen string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.svc != nil {
+		return nil
+	}
+	if !filepath.IsAbs(directory) {
+		return errors.New("应用数据目录必须是绝对路径")
+	}
+	for _, sub := range []string{"state", "imports", "workspaces"} {
+		if err := os.MkdirAll(filepath.Join(directory, sub), 0700); err != nil {
+			return err
+		}
+	}
+	st, err := store.Open(filepath.Join(directory, "state"), listen, "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	e.discovery = discovery.NewExternal(st.Config().DeviceID)
+	svc := service.NewWithOptions(st, service.Options{Discovery: e.discovery, DisableDiscovery: true, DisableAutoSync: true})
+	ctx, cancel := context.WithCancel(context.Background())
+	if err = svc.Start(ctx); err != nil {
+		cancel()
+		svc.Stop()
+		return err
+	}
+	e.svc, e.handler, e.dir, e.cancel = svc, svc.Handler(), directory, cancel
+	if name != "" {
+		body, _ := json.Marshal(map[string]string{"deviceName": name})
+		_, err = e.call("PUT", "/api/settings", string(body))
+		if err != nil {
+			cancel()
+			svc.Stop()
+			e.svc = nil
+			e.handler = nil
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *Engine) Stop() {
+	e.mu.RLock()
+	if e.cancel != nil {
+		e.cancel()
+	}
+	e.mu.RUnlock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.svc != nil {
+		e.cancel()
+		e.svc.Stop()
+		e.svc = nil
+		e.handler = nil
+	}
+}
+
+// DiscoveryInfo exposes only public identity for the platform's DNS-SD TXT data.
+func (e *Engine) DiscoveryInfo() (string, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.svc == nil {
+		return "", errors.New("服务未启动")
+	}
+	c := e.svc.Store().Config()
+	b, err := json.Marshal(map[string]any{"id": c.DeviceID, "name": c.DeviceName, "key": c.IdentityPublicKey, "fp": discovery.Fingerprint(c.IdentityPublicKey), "version": model.ProtocolVersion, "port": e.svc.ListenPort()})
+	return string(b), err
+}
+
+// UpdateDiscovery replaces untrusted address hints; pairing still checks TLS
+// against the advertised key and requires approval plus the six-digit code.
+func (e *Engine) UpdateDiscovery(snapshot string) error {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.svc == nil {
+		return errors.New("服务未启动")
+	}
+	if len(snapshot) > 128<<10 {
+		return errors.New("发现结果过大")
+	}
+	var devices []model.NearbyDevice
+	if err := json.Unmarshal([]byte(snapshot), &devices); err != nil {
+		return err
+	}
+	return e.discovery.ReplaceExternal(devices)
+}
+
+// Request dispatches a small, explicitly allowed set of existing JSON APIs in
+// process. It never exposes desktop filesystem dialogs or an unauthenticated port.
+func (e *Engine) Request(method, path, body string) (string, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.svc == nil {
+		return "", errors.New("服务未启动")
+	}
+	if !allowed(method, path) {
+		return "", errors.New("移动端不支持此操作")
+	}
+	if len(body) > 64<<10 {
+		return "", errors.New("请求过大")
+	}
+	return e.call(method, path, body)
+}
+
+func allowed(method, path string) bool {
+	if method == "GET" {
+		return path == "/api/status" || path == "/api/transfers"
+	}
+	if method == "POST" && (path == "/api/pair/start" || path == "/api/pair/confirm") {
+		return true
+	}
+	p := strings.Split(strings.Trim(path, "/"), "/")
+	if len(p) == 3 && p[0] == "api" && p[1] == "paired-devices" && safeName(p[2]) {
+		return method == "DELETE"
+	}
+	if len(p) == 4 && p[0] == "api" && p[1] == "pair" && p[2] == "requests" {
+		return method == "DELETE"
+	}
+	if len(p) == 5 && p[0] == "api" && p[1] == "pair" && p[2] == "requests" && p[4] == "approve" {
+		return method == "POST"
+	}
+	if len(p) == 4 && p[0] == "api" && p[1] == "shares" && p[3] == "sync" {
+		return method == "POST"
+	}
+	return len(p) == 4 && p[0] == "api" && p[1] == "transfers" && (p[3] == "cancel" || p[3] == "retry") && method == "POST"
+}
+
+func (e *Engine) call(method, path, body string) (string, error) {
+	r := httptest.NewRequest(method, "http://127.0.0.1"+path, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	e.handler.ServeHTTP(w, r)
+	if w.Code >= 400 {
+		var result struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(w.Body.Bytes(), &result) == nil && result.Error != "" {
+			return "", errors.New(result.Error)
+		}
+		return "", fmt.Errorf("操作失败：HTTP %d", w.Code)
+	}
+	return w.Body.String(), nil
+}
+
+func safeName(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, "/\\\x00") && len(name) < 240
+}
+
+// SendImport consumes a native-staged file using bounded streaming into the
+// existing upload pipeline. Native code owns and removes its imports afterwards.
+func (e *Engine) SendImport(peerID, importName, displayName string) (string, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.svc == nil {
+		return "", errors.New("服务未启动")
+	}
+	if !safeName(importName) || !safeName(displayName) {
+		return "", errors.New("文件名无效")
+	}
+	root, err := os.OpenRoot(filepath.Join(e.dir, "imports"))
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	f, err := root.Open(importName)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", errors.New("仅支持普通文件")
+	}
+	task, err := e.svc.CreateTransfer(peerID, []service.TransferFile{{Name: displayName, Size: info.Size()}})
+	if err != nil {
+		return "", err
+	}
+	reader, writer := io.Pipe()
+	multi := multipart.NewWriter(writer)
+	finished := make(chan error, 1)
+	go func() {
+		part, writeErr := multi.CreateFormFile("file", displayName)
+		if writeErr == nil {
+			_, writeErr = io.Copy(part, f)
+		}
+		if writeErr == nil {
+			writeErr = multi.Close()
+		}
+		_ = writer.CloseWithError(writeErr)
+		finished <- writeErr
+	}()
+	err = e.svc.UploadTransfer(context.Background(), task.ID, multipart.NewReader(reader, multi.Boundary()), reader)
+	_ = reader.Close()
+	writeErr := <-finished
+	if err != nil {
+		return "", err
+	}
+	if writeErr != nil {
+		return "", writeErr
+	}
+	return task.ID, nil
+}
+
+// CreateWorkspace creates only an app-managed synchronization root.
+func (e *Engine) CreateWorkspace(name, peerID, invitationID string) (string, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.svc == nil {
+		return "", errors.New("服务未启动")
+	}
+	if !safeName(name) {
+		return "", errors.New("工作区名称无效")
+	}
+	path := filepath.Join(e.dir, "workspaces", store.RandomID())
+	if err := os.Mkdir(path, 0700); err != nil {
+		return "", err
+	}
+	body, _ := json.Marshal(map[string]any{"path": path, "name": name, "deviceId": peerID, "autoSync": false, "intervalSeconds": 30})
+	endpoint := "/api/shares/invite"
+	if invitationID != "" {
+		if !safeName(invitationID) {
+			return "", errors.New("邀请无效")
+		}
+		endpoint = "/api/share-invitations/" + invitationID + "/accept"
+		body, _ = json.Marshal(map[string]any{"path": path, "autoSync": false, "intervalSeconds": 30})
+	}
+	result, err := e.call("POST", endpoint, string(body))
+	if err != nil {
+		_ = os.Remove(path)
+	}
+	return result, err
+}
+
+func (e *Engine) workspace(id string) (string, error) {
+	share, ok := e.svc.Store().Share(id)
+	if !ok {
+		return "", errors.New("工作区不存在")
+	}
+	rel, err := filepath.Rel(filepath.Join(e.dir, "workspaces"), share.Path)
+	if err != nil || !safeName(rel) {
+		return "", errors.New("工作区不属于此应用")
+	}
+	return share.Path, nil
+}
+
+func (e *Engine) WorkspaceFiles(id string) (string, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.svc == nil {
+		return "", errors.New("服务未启动")
+	}
+	path, err := e.workspace(id)
+	if err != nil {
+		return "", err
+	}
+	files := []map[string]any{}
+	err = filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return errors.New("工作区包含符号链接")
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if len(files) >= 2000 {
+			return errors.New("文件较多，请在电脑上查看")
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			rel, _ := filepath.Rel(path, p)
+			files = append(files, map[string]any{"name": filepath.ToSlash(rel), "size": info.Size()})
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(files)
+	return string(data), err
+}
+
+func (e *Engine) ImportToWorkspace(id, importName, displayName string) error {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.svc == nil {
+		return errors.New("服务未启动")
+	}
+	if !safeName(importName) || !safeName(displayName) {
+		return errors.New("文件名无效")
+	}
+	path, err := e.workspace(id)
+	if err != nil {
+		return err
+	}
+	srcRoot, err := os.OpenRoot(filepath.Join(e.dir, "imports"))
+	if err != nil {
+		return err
+	}
+	defer srcRoot.Close()
+	src, err := srcRoot.Open(importName)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dstRoot, err := os.OpenRoot(path)
+	if err != nil {
+		return err
+	}
+	defer dstRoot.Close()
+	dst, err := dstRoot.OpenFile(displayName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("无法导入，文件可能已存在：%w", err)
+	}
+	_, err = io.Copy(dst, src)
+	closeErr := dst.Close()
+	if err != nil {
+		_ = dstRoot.Remove(displayName)
+		return err
+	}
+	return closeErr
+}
+
+// ExportPath returns only validated completed receipt/workspace files to the
+// trusted native shell, which streams them into ACTION_CREATE_DOCUMENT's URI.
+func (e *Engine) ExportPath(taskID string, index int) (string, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.svc == nil {
+		return "", errors.New("服务未启动")
+	}
+	result, err := e.call("GET", "/api/transfers", "")
+	if err != nil {
+		return "", err
+	}
+	var list struct {
+		Tasks []service.TransferTask `json:"tasks"`
+	}
+	if err = json.Unmarshal([]byte(result), &list); err != nil {
+		return "", err
+	}
+	for _, task := range list.Tasks {
+		if task.ID != taskID {
+			continue
+		}
+		if task.Direction != "receive" || task.State != "complete" || index < 0 || index >= len(task.Files) {
+			return "", errors.New("文件尚未接收完成")
+		}
+		return filepath.Join(task.StorageDir, task.Files[index].Blob), nil
+	}
+	return "", errors.New("任务不存在")
+}
+
+func (e *Engine) WorkspaceExportPath(id, name string) (string, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.svc == nil {
+		return "", errors.New("服务未启动")
+	}
+	path, err := e.workspace(id)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsLocal(name) {
+		return "", errors.New("路径无效")
+	}
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	f, err := root.Open(name)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", errors.New("仅支持普通文件")
+	}
+	actual, err := filepath.EvalSymlinks(filepath.Join(path, name))
+	if err != nil {
+		return "", err
+	}
+	// Android may expose app storage through an aliased directory. Compare two
+	// canonical paths, while OpenRoot above still rejects escaping file links.
+	canonicalRoot, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(canonicalRoot, actual)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", errors.New("路径越界")
+	}
+	return actual, nil
+}
+
+// HasActiveWork is a small native bridge call, without status serialization.
+func (e *Engine) HasActiveWork() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.svc != nil && e.svc.HasActiveWork()
+}

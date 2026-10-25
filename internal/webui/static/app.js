@@ -81,6 +81,8 @@ function renderDevices() {
   const paired = state.data.pairedDevices || [];
   const nearby = (state.data.nearbyDevices || []).filter(device => !device.paired);
   $("#device-count").textContent = `${paired.length} 台已配对 · ${nearby.length} 台附近设备`;
+  // Keep the confirmation trigger stable while a user focuses or operates it.
+  if (state.modal === "unpair" || (document.activeElement?.matches(".unpair-device") && paired.some(device => device.id === document.activeElement.dataset.id))) return;
   const cards = [...paired.map(device => peerCard(device, true)), ...nearby.map(device => peerCard(device, false))];
   setContent("#device-list", cards.length ? cards.join("") : `<div class="empty"><div><div class="empty-symbol">${deviceIllustration}</div><h3>正在发现附近设备</h3><p>确保两台设备位于同一局域网并已启动 PolySync。</p></div></div>`);
 }
@@ -88,10 +90,11 @@ function renderDevices() {
 function peerCard(device, paired) {
   const online = Boolean(device.online);
   const fingerprint = device.fingerprint || (device.publicKey ? device.publicKey.slice(0, 16) : "");
-  return `<article class="peer-card"><div class="peer-top"><div><div class="peer-name">${escapeHTML(device.name)}</div><div class="peer-detail" title="${escapeHTML(fingerprint)}">${escapeHTML(fingerprint)}</div></div><span class="peer-state ${online ? "online" : ""}"><i></i>${online ? "在线" : "离线"}</span></div><div class="peer-footer">${paired ? `<span class="trust-badge">已安全配对</span><span class="muted">${escapeHTML(formatTime(device.lastSeen))}</span>` : `<span class="muted">附近设备</span><button class="button small pair-device" data-id="${escapeHTML(device.id)}" data-address="${escapeHTML((device.addresses || [])[0] || "")}">配对</button>`}</div></article>`;
+  return `<article class="peer-card"><div class="peer-top"><div><div class="peer-name">${escapeHTML(device.name)}</div><div class="peer-detail" title="${escapeHTML(fingerprint)}">${escapeHTML(fingerprint)}</div></div><span class="peer-state ${online ? "online" : ""}"><i></i>${online ? "在线" : "离线"}</span></div><div class="peer-footer">${paired ? `<span class="trust-badge">已安全配对</span><button class="button small danger unpair-device" data-id="${escapeHTML(device.id)}" aria-label="取消与 ${escapeHTML(device.name)} 的配对">取消配对</button>` : `<span class="muted">附近设备</span><button class="button small pair-device" data-id="${escapeHTML(device.id)}" data-address="${escapeHTML((device.addresses || [])[0] || "")}">配对</button>`}</div></article>`;
 }
 
 function statusText(share) {
+  if (share.state === "unpaired") return "已取消配对 · 本地文件保留";
   if (share.state === "pending") return "等待对方接受邀请";
   if (share.state === "legacy") return "需要重新配对并邀请";
   const status = share.status || {};
@@ -157,6 +160,14 @@ function openNearby() {
   openModal(`<h2 id="modal-title">添加设备</h2><p class="modal-intro">PolySync 通过 mDNS 自动发现同一局域网中的设备。</p><div class="device-grid modal-device-grid">${nearby.length ? nearby.map(device => peerCard(device, false)).join("") : `<div class="no-activity">暂未发现设备。请确认另一台设备已启动，并允许 mDNS 和 TCP 通过防火墙。</div>`}</div><form id="manual-pair-form"><div class="field"><label for="manual-address">手动地址</label><div class="path-input"><input class="input" id="manual-address" required placeholder="192.168.1.20:45123"><button class="button ghost" type="submit">连接</button></div><small>适用于 mDNS 被防火墙或 VLAN 阻断的网络，设备身份仍会通过证书和验证码确认。</small></div></form><div class="modal-actions"><button class="button primary" data-close>完成</button></div>`, "nearby");
 }
 
+function openUnpair(id) {
+  const device = (state.data.pairedDevices || []).find(item => item.id === id);
+  if (!device) return;
+  const count = state.data.shares.filter(share => share.peerDeviceId === id && share.state !== "unpaired").length;
+  openModal(`<h2 id="modal-title">取消配对</h2><p class="modal-intro">取消与“${escapeHTML(device.name)}”的配对后，本机将不再接受它的随传或同步。${count ? `关联的 ${count} 个同步文件夹将停用。` : ""}本地文件、工作区和历史记录会保留。</p><p class="modal-intro">此操作仅在本机生效，对方需单独取消配对。之后如需重新连接，请在双方取消配对后重新验证，并创建新的同步邀请。</p><form id="unpair-form"><p id="unpair-error" role="alert"></p><div class="modal-actions"><button class="button ghost" type="button" data-close>保留配对</button><button class="button danger" type="submit">取消配对</button></div></form>`, "unpair");
+  state.selectedId = id;
+}
+
 async function beginPair(deviceId, address) {
   try {
     const result = await api("/api/pair/start", { method: "POST", body: JSON.stringify({ deviceId, address }) });
@@ -210,6 +221,8 @@ async function pickFolder(button) {
 }
 
 document.addEventListener("click", async event => {
+  const unpair = event.target.closest(".unpair-device");
+  if (unpair) return openUnpair(unpair.dataset.id);
   const target = event.target;
   if (target.closest("#add-device")) return openNearby();
   if (target.closest("#add-share") || target.closest("#empty-add")) return openShareInvite();
@@ -252,12 +265,17 @@ document.addEventListener("change", async event => {
 });
 
 document.addEventListener("submit", async event => {
-  if (!["manual-pair-form", "pair-form", "invite-form", "accept-form", "edit-form", "device-form"].includes(event.target.id)) return;
+  if (!["manual-pair-form", "pair-form", "unpair-form", "invite-form", "accept-form", "edit-form", "device-form"].includes(event.target.id)) return;
   event.preventDefault();
   const submit = event.target.querySelector("button[type=submit]");
   submit.disabled = true;
   try {
-    if (event.target.id === "pair-form") {
+    if (event.target.id === "unpair-form") {
+      $("#unpair-error").textContent = "";
+      await api(`/api/paired-devices/${encodeURIComponent(state.selectedId)}`, { method: "DELETE" });
+      closeModal(); toast("已取消配对，本地文件保留"); await refresh();
+      $("#add-device").focus({ preventScroll: true });
+    } else if (event.target.id === "pair-form") {
       await api("/api/pair/confirm", { method: "POST", body: JSON.stringify({ sessionId: state.pairSession, code: $("#pair-code-input").value }) });
       closeModal(); toast("设备配对成功"); await refresh();
     } else if (event.target.id === "manual-pair-form") {
@@ -276,7 +294,11 @@ document.addEventListener("submit", async event => {
       await api("/api/settings", { method: "PUT", body: JSON.stringify({ deviceName: $("#device-name").value }) });
       closeModal(); toast("设备名称已更新，重启后刷新 mDNS 名称"); await refresh();
     }
-  } catch (error) { toast(error.message, true); submit.disabled = false; }
+  } catch (error) {
+    if (event.target.id === "unpair-form" && state.modal === "unpair") $("#unpair-error").textContent = error.message;
+    else toast(error.message, true);
+    submit.disabled = false;
+  }
 });
 
 $("#modal-backdrop").addEventListener("click", event => { if (event.target.id === "modal-backdrop") closeModal(); });

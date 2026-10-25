@@ -3,3 +3,13 @@
 *.exe
 *.log
 .DS_Store
+
+/.wix/
+/apps/android/.gradle/
+/apps/android/.kotlin/
+/apps/android/**/build/
+/apps/android/local.properties
+/apps/android/app/libs/
+*.jks
+*.keystore
+__pycache__/

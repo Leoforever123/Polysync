@@ -150,13 +150,19 @@ func (f *Framer) WriteJSON(value any) error {
 	return f.writer.Flush()
 }
 
-func (f *Framer) ReadJSON(target any) error {
+func (f *Framer) ReadJSON(target any) error { return f.ReadJSONLimit(target, maxFrameSize) }
+
+// ReadJSONLimit rejects oversized control frames before allocating their body.
+func (f *Framer) ReadJSONLimit(target any, limit uint32) error {
+	if limit == 0 || limit > maxFrameSize {
+		return errors.New("invalid frame limit")
+	}
 	var size [4]byte
 	if _, err := io.ReadFull(f.reader, size[:]); err != nil {
 		return err
 	}
 	length := binary.BigEndian.Uint32(size[:])
-	if length == 0 || length > maxFrameSize {
+	if length == 0 || length > limit {
 		return fmt.Errorf("invalid protocol frame size: %d", length)
 	}
 	data := make([]byte, int(length))

@@ -22,6 +22,8 @@ func (s *Service) ShareInvitations() []model.ShareInvitation {
 }
 
 func (s *Service) InviteShare(ctx context.Context, deviceID, name, path string, auto bool, interval int) (model.Share, error) {
+	s.peerControlMu.RLock()
+	defer s.peerControlMu.RUnlock()
 	device, paired := s.store.PairedDevice(deviceID)
 	if !paired {
 		return model.Share{}, errors.New("只能邀请已配对设备")
@@ -70,6 +72,8 @@ func (s *Service) InviteShare(ctx context.Context, deviceID, name, path string, 
 }
 
 func (s *Service) AcceptShareInvitation(ctx context.Context, invitationID, path string, auto bool, interval int) (model.Share, error) {
+	s.peerControlMu.RLock()
+	defer s.peerControlMu.RUnlock()
 	s.mu.RLock()
 	invitation, exists := s.shareInvitations[invitationID]
 	s.mu.RUnlock()

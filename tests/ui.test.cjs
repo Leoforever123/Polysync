@@ -53,6 +53,46 @@ test("folder names and paths are escaped and pending/syncing actions disabled", 
   a.context.folder.status.state = "syncing";
   assert.match(a.run("shareCard(folder)"), /sync-button" disabled/);
 });
+
+test("unpair confirmation escapes names, explains scope and preserves focused device controls", () => {
+  const a = app();
+  a.context.device = { id: 'peer', name: '<img src=x onerror=bad>', online: false };
+  a.run('state.data = { pairedDevices: [device], nearbyDevices: [], shares: [{peerDeviceId: "peer", state: "active"}] }');
+  const html = a.run('peerCard(device, true)');
+  assert.match(html, /unpair-device/);
+  assert.ok(!html.includes('<img'));
+  a.run('renderDevices()');
+  const writes = a.node('#device-list').writes;
+  a.document.activeElement = { matches: selector => selector === '.unpair-device', dataset: {id: 'peer'} };
+  a.run('device.online = true; renderDevices()');
+  assert.equal(a.node('#device-list').writes, writes);
+  a.run('openUnpair("peer")');
+  const modal = a.node('#modal-content').innerHTML;
+  assert.ok(!modal.includes('<img'));
+  assert.match(modal, /1 个同步文件夹将停用/);
+  assert.match(modal, /对方需单独取消配对/);
+  assert.match(modal, /本地文件、工作区和历史记录会保留/);
+  a.context.share = {id:'s', name:'local', path:'local', state:'unpaired', status:{state:'synced'}};
+  assert.match(a.run('shareCard(share)'), /sync-button" disabled/);
+  assert.match(a.run('statusText(share)'), /已取消配对/);
+});
+
+test("unpair submits DELETE only on confirmation and keeps server errors visible for retry", async () => {
+  const a = app();
+  const calls = [];
+  a.context.fetch = async (url, options) => {
+    calls.push({url, method:options?.method});
+    return {ok:false, json:async()=>({error:'仍有文件任务正在进行'})};
+  };
+  a.run('state.data = {pairedDevices:[{id:"peer/encoded",name:"Phone"}],shares:[]}; openUnpair("peer/encoded")');
+  assert.equal(calls.length, 0);
+  const submit = {disabled:false};
+  await a.listeners.submit({target:{id:'unpair-form',querySelector:()=>submit},preventDefault(){}});
+  assert.deepEqual(calls, [{url:'/api/paired-devices/peer%2Fencoded',method:'DELETE'}]);
+  assert.equal(a.node('#unpair-error').textContent, '仍有文件任务正在进行');
+  assert.equal(submit.disabled, false);
+  assert.equal(a.run('state.modal'), 'unpair');
+});
 test("modal Escape restores focus and unlocks body scrolling", () => {
   const a = app();
   const trigger = a.node("#add-device");
@@ -97,4 +137,12 @@ test("transfer filenames, peer names and paths are escaped", () => {
  a.context.task = {id:'test',peerName:'<script>bad</script>',direction:'receive',state:'complete',created:'2026-09-08T00:00:00Z',total:0,done:0,storageDir:'<path>',files:[{name:'<img onerror=bad>',size:0,state:'complete'}]};
  const html = a.run("transferCard(task)");
  assert.ok(!html.includes("<script>")); assert.ok(!html.includes("<img")); assert.ok(html.includes("&lt;path&gt;"));
+});
+
+const { updateButtonState } = require("../internal/webui/static/update.js");
+test("update controls require verified download and supported platform", () => {
+ assert.equal(updateButtonState({phase:"available",available:true,supported:true}).install,false);
+ assert.equal(updateButtonState({phase:"ready",available:true,supported:true}).install,true);
+ assert.equal(updateButtonState({phase:"downloading",available:true,supported:true}).check,false);
+ assert.equal(updateButtonState({phase:"available",available:true,supported:false}).download,false);
 });

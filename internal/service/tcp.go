@@ -35,17 +35,16 @@ type responseFrame struct {
 }
 
 func (s *Service) SyncShare(ctx context.Context, shareID string, manual bool) error {
-	s.mu.Lock()
-	if err := s.ctx.Err(); err != nil {
-		s.mu.Unlock()
+	if err := s.beginSyncWork(); err != nil {
 		return err
 	}
-	s.wg.Add(1)
-	s.mu.Unlock()
-	defer s.wg.Done()
+	defer s.endSyncWork()
 	share, exists := s.store.Share(shareID)
 	if !exists {
 		return fmt.Errorf("sync folder not found")
+	}
+	if share.State == "unpaired" {
+		return errors.New("此同步已因取消配对而停用，请重新配对并创建同步邀请")
 	}
 	lock := s.lockFor(shareID)
 	if !lock.TryLock() {
@@ -191,10 +190,10 @@ func (s *Service) SyncShare(ctx context.Context, shareID string, manual bool) er
 }
 
 func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
-	_ = connection.SetDeadline(time.Now().Add(sessionTimeout))
+	_ = connection.SetDeadline(time.Now().Add(8 * time.Second))
 	framer := protocol.NewFramer(connection)
 	var hello protocol.Hello
-	if err := framer.ReadJSON(&hello); err != nil {
+	if err := framer.ReadJSONLimit(&hello, 64<<10); err != nil {
 		return
 	}
 	if hello.Type != "hello" || hello.Protocol != model.ProtocolVersion {
@@ -202,7 +201,13 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 		return
 	}
 	switch hello.Operation {
+	case "pair_request", "pair_confirm", "share_invite", "share_accept":
+		s.peerControlMu.RLock()
+		defer s.peerControlMu.RUnlock()
+	}
+	switch hello.Operation {
 	case "transfer":
+		_ = connection.SetDeadline(time.Now().Add(sessionTimeout))
 		s.handleTransfer(ctx, connection, framer, hello)
 		return
 	case "identify":
@@ -222,6 +227,11 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 		s.handleShareAccept(connection, framer, hello)
 		return
 	case "sync":
+		if err := s.beginSyncWork(); err != nil {
+			_ = writeError(framer, "updating", err.Error())
+			return
+		}
+		defer s.endSyncWork()
 	default:
 		_ = writeError(framer, "operation", "未知操作")
 		return
@@ -241,6 +251,7 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 		_ = writeError(framer, "share_auth", "该设备未获授权访问此同步文件夹")
 		return
 	}
+	_ = connection.SetDeadline(time.Now().Add(sessionTimeout))
 	nonce := randomNonce()
 	config := s.store.Config()
 	if err := framer.WriteJSON(protocol.Challenge{

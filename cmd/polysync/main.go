@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"syscall"
@@ -18,6 +19,7 @@ import (
 	"polysync/internal/service"
 	"polysync/internal/store"
 	"polysync/internal/tray"
+	"polysync/internal/update"
 )
 
 var version = "dev"
@@ -29,7 +31,15 @@ func main() {
 	openUI := flag.Bool("open", true, "open the web console in the default browser")
 	useTray := flag.Bool("tray", true, "show Windows system tray icon")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	applyUpdate := flag.String("apply-update", "", "internal update helper job")
 	flag.Parse()
+	if *applyUpdate != "" {
+		if err := update.RunHelper(*applyUpdate); err != nil {
+			log.Print(err)
+			os.Exit(1)
+		}
+		return
+	}
 	if *showVersion {
 		fmt.Println("PolySync", version)
 		return
@@ -57,6 +67,38 @@ func run(ctx context.Context, cancel context.CancelFunc, dataDir, listenAddr, ui
 		return err
 	}
 	syncService := service.New(dataStore)
+	cacheBase, err := os.UserCacheDir()
+	if err != nil {
+		return err
+	}
+	updateCache := filepath.Join(cacheBase, "Polysync", "updates")
+	updater, err := update.New(ctx, version, updateCache, listener.Addr().String(), func(packagePath, digest string) error {
+		if err := syncService.PrepareUpdate(); err != nil {
+			return err
+		}
+		installed, err := update.InstalledPath()
+		if err != nil {
+			syncService.CancelUpdate()
+			return err
+		}
+		previous, err := os.Executable()
+		if err != nil {
+			syncService.CancelUpdate()
+			return err
+		}
+		job := update.Job{ParentPID: os.Getpid(), Package: packagePath, Digest: digest, Cache: updateCache, Installed: installed, Previous: previous, Args: []string{"-data-dir", dataStore.Dir(), "-listen", listenAddr, "-ui", uiAddr, "-open=true", fmt.Sprintf("-tray=%t", useTray)}}
+		if err := update.LaunchHelper(ctx, job); err != nil {
+			syncService.CancelUpdate()
+			return err
+		}
+		time.AfterFunc(500*time.Millisecond, cancel)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	defer updater.Close()
+	syncService.SetUpdater(updater)
 	notifications := make(chan tray.Notification, 16)
 	syncService.SetTransferNotifier(func(text, id string) {
 		select {

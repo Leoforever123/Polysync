@@ -1,0 +1,20 @@
+# Local, offline build recipe. Public AUR submission is a separate release step.
+pkgname=polysync
+pkgver=@VERSION@
+pkgrel=@REVISION@
+pkgdesc='Personal LAN file synchronization and transfer'
+arch=('x86_64')
+url='https://github.com/Leoforever123/Polysync'
+license=('LicenseRef-Proprietary')
+optdepends=('systemd: optional user background service'
+            'xdg-utils: open the local console from the application menu'
+            'curl: wait for the local console before opening the browser'
+            'zenity: native folder and save dialogs')
+options=('!strip' '!debug')
+source=('@SOURCE@')
+sha256sums=('@SHA256@')
+
+package() {
+    cp -a "$srcdir/usr" "$pkgdir/usr"
+    install -Dm644 "$srcdir/usr/share/doc/polysync/copyright" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

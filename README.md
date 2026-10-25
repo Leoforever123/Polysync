@@ -16,6 +16,9 @@ PolySync 是一个面向个人设备的局域网双向文件同步工具。两�
 - 文件流式传输、SHA-256 校验、旧版本归档和内容去重对象库
 - 在线自动重试；可按文件夹关闭自动同步或手动立即同步
 - 浏览器本地控制台和系统原生文件夹选择器
+- Windows x64 MSI 安装包，以及控制台、托盘中的“版本与更新”入口
+- Ubuntu amd64/arm64 `.deb`、Arch x86_64 安装包与离线 PKGBUILD、可选的 Linux 用户级后台服务
+- Android arm64 原生调试版：mDNS 自动发现、绿色原生界面、USB 安装、配对、单文件随传与应用内工作区同步，见 [Android 真机调试](docs/android-debug.md)
 
 ## 快速开始
 
@@ -36,6 +39,23 @@ go run ./cmd/polysync
 5. 另一台设备接受邀请并选择对应本地文件夹，随后通过 TLS 1.3 开始首次同步。
 
 设备只需配对一次，之后可以创建任意多个互不重叠的同步文件夹。
+
+取消配对：电脑端在已配对设备卡片点击“取消配对”；Android 在“设备 → 我的设备”中选择“取消配对”，确认后撤销本机信任，离线设备也可移除。关联同步会停用，本地文件、历史和随传记录不删除；Android 工作区仍可查看与导出。有设备操作或文件任务进行时请先完成或取消，再重试。
+
+取消配对仅在本机生效，对方需单独取消。重新连接前，先在双方取消配对，再重新验证并创建同步邀请；旧同步不会自动恢复。电脑端如需继续使用原文件夹，可先移除已停用的同步配置（不删除文件）再重新邀请。详见 [取消配对：行为与验证](docs/unpairing.md)。
+
+Windows 安装版：打开 `polysync-windows-amd64.msi`，安装后从开始菜单启动 PolySync。安装到当前用户目录，通常不需要管理员权限。旧版直接运行 EXE 的用户，先从托盘退出旧程序，再安装 MSI；默认配置目录不变，无需重新配对。使用过自定义 `-data-dir` 的用户需继续使用该参数启动。
+
+在页面底部或 Windows 托盘打开“版本与更新”，依次检查更新、下载安装包、安装并重启。正在同步或随传时会暂缓安装；升级保留配置和数据。该功能按需检查，不新增定时联网检查或常驻更新服务。当前仅 Windows x64 支持应用内安装；详见 [安装与更新](docs/installation-and-updates.md)。
+
+Linux 用户可从 [官网下载页](https://leoforever123.github.io/Polysync/#downloads) 或 [GitHub Release](https://github.com/Leoforever123/Polysync/releases/latest) 点击下载 Ubuntu / Arch 安装包。下载后在所在目录打开终端：
+
+```sh
+sudo apt install ./polysync_0.4.0-1_amd64.deb           # Ubuntu x86_64
+sudo pacman -U ./polysync-0.4.0-1-x86_64.pkg.tar.zst   # Arch x86_64
+```
+
+Ubuntu ARM64 使用对应的 `_arm64.deb`。安装后可从应用菜单打开，或运行 `polysync -tray=false`。后台服务可选用 `systemctl --user enable --now polysync.service`，安装过程不会自动启用。Linux 更新使用新版安装包，卸载保留个人数据；完整命令、依赖与验证范围见 [Linux 安装与更新](docs/linux-installation.md)。
 
 ## 命令行参数
 
@@ -59,6 +79,7 @@ polysync -data-dir ./device-b -listen 127.0.0.1:45223 -ui 127.0.0.1:45224 -open=
 Windows PowerShell：
 
 ```powershell
+dotnet tool install wix --tool-path .cache/wix4 --version 4.0.6
 ./scripts/build.ps1
 ```
 
@@ -68,9 +89,11 @@ Linux 或 macOS：
 ./scripts/build.sh
 ```
 
-脚本会在 `dist/` 生成 Windows amd64、Linux amd64/arm64、macOS amd64/arm64 五个无外部运行时依赖的可执行文件。macOS 构建产物未进行 Apple 开发者签名；首次运行可能需要在“隐私与安全性”中确认。
+脚本会在 `dist/` 生成 Windows amd64、Linux amd64/arm64、macOS amd64/arm64 五个无外部运行时依赖的可执行文件。PowerShell 构建还生成 Windows MSI 和包含 MSI 的 `SHA256SUMS.txt`；打包需 .NET SDK 与 WiX 4.0.6，`-SkipMSI` 可仅构建可执行文件。Linux/macOS 构建脚本不生成 MSI。MSI 和 EXE 尚未做发布者代码签名；macOS 构建也未做 Apple 开发者签名。
 
 从 Windows 复制 Linux/macOS 原始二进制后，需要先恢复执行权限：`chmod +x polysync-*`。
+
+在 Linux/WSL 中对上述二进制打包：`python3 scripts/package-linux.py --version 0.4.0 --format all`。需要 Python 3.11+、dpkg-deb 和 makepkg；也可单独指定 `--format deb` 或 `--format arch`。脚本校验 ELF 架构、静态链接以及构建生成的 `.build-info` 版本/哈希，输出安装包、离线 Arch 构建材料和独立的 `SHA256SUMS-linux-0.4.0-1-all.txt`。详见 [本轮打包验证](docs/packaging-verification-2026-10-25.md)。
 
 ## 随传与新手引导
 
@@ -164,9 +187,16 @@ node tests/ui.browser.cjs
 截图保存在 `.cache/ui-review/`。浏览器测试中的设备和文件夹是测试夹具，不会创建真实同步配置。Windows Go 测试还会创建短暂托盘图标，验证双击和退出，需要可访问的桌面会话。
 
 项目协作规范见 [AGENTS.md](AGENTS.md)。
+
+项目目前保留所有权利，未采用开源许可证，见 [LICENSE](LICENSE)。第三方组件继续适用各自许可证，Go 核心及构建工具声明见 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt)。AUR 注册暂不可用，当前通过网页下载 Arch 包后使用 pacman 安装；尚不能通过 `yay -S polysync-bin` 安装。
 ## 产品方案与实施记录
+
+- [跨平台技术设计与实现核对报告：后台、内存、UI 与待决策项](docs/cross-platform-design-review-2026-09-22.md)
 
 - [新手引导与随传工作台方案](docs/onboarding-and-transfer-plan.md)
 - [托盘快捷入口：现有操作、UI 规格与调整表](docs/tray-interaction-spec.md)
 
 - [随传与新手引导：实施和验证](docs/transfer-implementation.md)
+- [安装与应用内更新：构建、验证和限制](docs/installation-and-updates.md)
+- [轻量常驻与事件触发同步：后续思路](docs/background-roadmap.md)
+- [手机端与商店发布规划：Android / iOS、国内 / 海外](docs/mobile-platform-and-release-plan-2026-09-21.md)

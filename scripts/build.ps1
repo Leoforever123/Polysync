@@ -1,11 +1,11 @@
-param([string]$Version = "0.3.0")
+param([string]$Version = "0.4.0", [switch]$SkipMSI)
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $DistDir = Join-Path $ProjectRoot "dist"
 $GoCommand = Get-Command go -ErrorAction SilentlyContinue
 $Go = if ($GoCommand) { $GoCommand.Source } else { Join-Path $ProjectRoot ".cache/toolchain/go/bin/go.exe" }
 if (-not (Test-Path -LiteralPath $Go)) { throw "Install Go 1.26+ or place it in .cache/toolchain/go." }
-$Previous = @{ GOOS=$env:GOOS; GOARCH=$env:GOARCH; GOCACHE=$env:GOCACHE; GOMODCACHE=$env:GOMODCACHE }
+$Previous = @{ GOOS=$env:GOOS; GOARCH=$env:GOARCH; GOCACHE=$env:GOCACHE; GOMODCACHE=$env:GOMODCACHE; CGO_ENABLED=$env:CGO_ENABLED }
 $Targets = @(
  @{ OS="windows"; Arch="amd64"; Extension=".exe" },
  @{ OS="linux"; Arch="amd64"; Extension="" },
@@ -16,6 +16,7 @@ $Targets = @(
 New-Item -ItemType Directory -Force $DistDir | Out-Null
 Push-Location $ProjectRoot
 try {
+ $env:CGO_ENABLED = '0'
  $env:GOCACHE = Join-Path $ProjectRoot ".cache/go-build"
  $env:GOMODCACHE = Join-Path $ProjectRoot ".cache/go-mod"
  foreach ($Target in $Targets) {
@@ -27,12 +28,22 @@ try {
   Write-Host "Building $Output"
   & $Go build -trimpath -ldflags $Flags -o $Output ./cmd/polysync
   if ($LASTEXITCODE -ne 0) { throw "Build failed: $($Target.OS)/$($Target.Arch)" }
+  if ($Target.OS -eq 'linux') {
+   $BinaryHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Output).Hash.ToLowerInvariant()
+   [IO.File]::WriteAllText("$Output.build-info", "$Version $BinaryHash`n", [Text.UTF8Encoding]::new($false))
+  }
  }
 } finally {
  $env:GOOS=$Previous.GOOS
  $env:GOARCH=$Previous.GOARCH
  $env:GOCACHE=$Previous.GOCACHE
  $env:GOMODCACHE=$Previous.GOMODCACHE
+ $env:CGO_ENABLED=$Previous.CGO_ENABLED
  Pop-Location
 }
+if (-not $SkipMSI) { & (Join-Path $PSScriptRoot "build-msi.ps1") -Version $Version }
+$Assets = @("polysync-windows-amd64.exe", "polysync-linux-amd64", "polysync-linux-arm64", "polysync-darwin-amd64", "polysync-darwin-arm64")
+if (-not $SkipMSI) { $Assets += "polysync-windows-amd64.msi" }
+$Checksums = foreach ($Asset in $Assets) { $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $DistDir $Asset)).Hash.ToLowerInvariant(); "$Hash  $Asset" }
+[IO.File]::WriteAllLines((Join-Path $DistDir "SHA256SUMS.txt"), $Checksums)
 Write-Host "Build complete: $DistDir"

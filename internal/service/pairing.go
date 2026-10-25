@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"sort"
 	"time"
 
@@ -136,6 +137,8 @@ func (s *Service) identifyDevice(ctx context.Context, address string) (model.Nea
 }
 
 func (s *Service) startPairingDevice(ctx context.Context, nearby model.NearbyDevice, address string) (string, error) {
+	s.peerControlMu.RLock()
+	defer s.peerControlMu.RUnlock()
 	if address == "" && len(nearby.Addresses) > 0 {
 		address = nearby.Addresses[0]
 	}
@@ -184,6 +187,8 @@ func (s *Service) startPairingDevice(ctx context.Context, nearby model.NearbyDev
 }
 
 func (s *Service) ConfirmPairing(ctx context.Context, sessionID, code string) error {
+	s.peerControlMu.RLock()
+	defer s.peerControlMu.RUnlock()
 	s.mu.RLock()
 	session, exists := s.outboundPairs[sessionID]
 	s.mu.RUnlock()
@@ -239,11 +244,11 @@ func (s *Service) ConfirmPairing(ctx context.Context, sessionID, code string) er
 
 func (s *Service) handlePairRequest(connection *tls.Conn, framer *protocol.Framer, hello protocol.Hello) {
 	var request protocol.PairRequest
-	if err := framer.ReadJSON(&request); err != nil {
+	if err := framer.ReadJSONLimit(&request, 64<<10); err != nil {
 		return
 	}
 	peerKey, err := peerIdentity(connection)
-	if err != nil || request.Type != "pair_request" || request.DeviceID != hello.DeviceID || request.PublicKey != peerKey || request.RequestID == "" {
+	if err != nil || request.Type != "pair_request" || request.DeviceID != hello.DeviceID || request.PublicKey != peerKey || request.RequestID == "" || len(request.RequestID) > 128 || request.DeviceID == "" || len(request.DeviceID) > 128 || len(request.DeviceName) > 255 || len(request.ClientNonce) > 128 {
 		_ = writeError(framer, "pairing", "无效的配对请求")
 		return
 	}
@@ -259,16 +264,18 @@ func (s *Service) handlePairRequest(connection *tls.Conn, framer *protocol.Frame
 		ID: request.RequestID, DeviceID: request.DeviceID, DeviceName: request.DeviceName, PublicKey: request.PublicKey,
 		Address: remoteAddress(connection.RemoteAddr(), hello.ListenPort), Code: code, ExpiresAt: expires,
 	}, ClientNonce: request.ClientNonce, ServerNonce: serverNonce}
-	s.mu.Lock()
-	s.pairingRequests[request.RequestID] = pending
-	s.mu.Unlock()
+	host, _, _ := net.SplitHostPort(connection.RemoteAddr().String())
+	if err := s.admitPairRequest(host, pending, time.Now()); err != nil {
+		_ = writeError(framer, "pairing_busy", err.Error())
+		return
+	}
 	s.log("info", "", "收到来自 “"+request.DeviceName+"” 的配对请求")
 	_ = framer.WriteJSON(protocol.PairChallenge{Type: "pair_challenge", RequestID: request.RequestID, ServerNonce: serverNonce, DeviceID: config.DeviceID, DeviceName: config.DeviceName, PublicKey: config.IdentityPublicKey, ExpiresAt: expires.Unix()})
 }
 
 func (s *Service) handlePairConfirm(connection *tls.Conn, framer *protocol.Framer, hello protocol.Hello) {
 	var confirm protocol.PairConfirm
-	if err := framer.ReadJSON(&confirm); err != nil {
+	if err := framer.ReadJSONLimit(&confirm, 64<<10); err != nil {
 		return
 	}
 	s.mu.Lock()
@@ -313,4 +320,40 @@ func pairedAddress(device model.PairedDevice) string {
 		return ""
 	}
 	return device.Addresses[0]
+}
+
+type pairRate struct {
+	until time.Time
+	count int
+}
+
+func (s *Service) admitPairRequest(source string, pending pendingPair, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, p := range s.pairingRequests {
+		if !now.Before(p.Request.ExpiresAt) {
+			delete(s.pairingRequests, id)
+		}
+	}
+	for host, rate := range s.pairSources {
+		if !now.Before(rate.until) {
+			delete(s.pairSources, host)
+		}
+	}
+	for _, p := range s.pairingRequests {
+		if p.Request.ID == pending.Request.ID || p.Request.DeviceID == pending.Request.DeviceID || p.Request.PublicKey == pending.Request.PublicKey {
+			return errors.New("已有待处理配对请求，请先处理或等待过期")
+		}
+	}
+	rate, exists := s.pairSources[source]
+	if len(s.pairingRequests) >= 32 || (!exists && len(s.pairSources) >= 64) || rate.count >= 8 {
+		return errors.New("配对请求过于频繁，请稍后重试")
+	}
+	if !exists {
+		rate.until = now.Add(time.Minute)
+	}
+	rate.count++
+	s.pairSources[source] = rate
+	s.pairingRequests[pending.Request.ID] = pending
+	return nil
 }

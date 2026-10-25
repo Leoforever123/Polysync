@@ -13,36 +13,60 @@ import (
 	"polysync/internal/discovery"
 	"polysync/internal/model"
 	"polysync/internal/store"
+	"polysync/internal/update"
 )
 
 var ErrBusy = errors.New("sync already in progress")
 
 type Service struct {
-	transfers        *transferManager
-	transferConfigMu sync.Mutex
-	trayEnabled      bool
-	ctx              context.Context
-	cancel           context.CancelFunc
-	stopParent       func() bool
-	store            *store.Store
-	mu               sync.RWMutex
-	statuses         map[string]model.RuntimeStatus
-	activities       []model.Activity
-	locks            map[string]*sync.Mutex
-	listener         net.Listener
-	listenPort       int
-	wg               sync.WaitGroup
-	discovery        *discovery.Service
-	certificate      tls.Certificate
-	pairingRequests  map[string]pendingPair
-	outboundPairs    map[string]outboundPair
-	shareInvitations map[string]model.ShareInvitation
+	options            Options
+	updater            *update.Manager
+	updating           bool
+	activeSync         int
+	activeTransferWork int
+	transfers          *transferManager
+	transferConfigMu   sync.Mutex
+	trayEnabled        bool
+	ctx                context.Context
+	cancel             context.CancelFunc
+	stopParent         func() bool
+	store              *store.Store
+	mu                 sync.RWMutex
+	peerControlMu      sync.RWMutex // serializes unpair with pairing/share control operations
+	statuses           map[string]model.RuntimeStatus
+	activities         []model.Activity
+	locks              map[string]*sync.Mutex
+	listener           net.Listener
+	listenPort         int
+	wg                 sync.WaitGroup
+	discovery          *discovery.Service
+	certificate        tls.Certificate
+	pairingRequests    map[string]pendingPair
+	outboundPairs      map[string]outboundPair
+	shareInvitations   map[string]model.ShareInvitation
+	inboundSlots       chan struct{}
+	pairSources        map[string]pairRate
 }
 
 func New(dataStore *store.Store) *Service {
+	return NewWithOptions(dataStore, Options{})
+}
+
+// Options lets an embedded host own discovery and scheduling. Desktop defaults
+// remain unchanged. Set options before starting the service.
+type Options struct {
+	Discovery        *discovery.Service
+	DisableDiscovery bool
+	DisableAutoSync  bool
+}
+
+func NewWithOptions(dataStore *store.Store, options Options) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &Service{
-		ctx: ctx, cancel: cancel, transfers: newTransferManager(dataStore.Dir()),
+		inboundSlots: make(chan struct{}, 32), pairSources: make(map[string]pairRate),
+		discovery: options.Discovery,
+		options:   options,
+		ctx:       ctx, cancel: cancel, transfers: newTransferManager(dataStore.Dir()),
 		store: dataStore, statuses: make(map[string]model.RuntimeStatus), locks: make(map[string]*sync.Mutex),
 		pairingRequests: make(map[string]pendingPair), outboundPairs: make(map[string]outboundPair), shareInvitations: make(map[string]model.ShareInvitation),
 	}
@@ -80,7 +104,7 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 	s.log("info", "", fmt.Sprintf("TCP 同步服务已监听 %s", listener.Addr()))
 	// A loopback listener cannot serve peers at the LAN addresses advertised by mDNS.
-	if address, ok := listener.Addr().(*net.TCPAddr); !ok || !address.IP.IsLoopback() {
+	if address, ok := listener.Addr().(*net.TCPAddr); s.discovery == nil && !s.options.DisableDiscovery && (!ok || !address.IP.IsLoopback()) {
 		discoveryService, discoveryErr := discovery.Start(ctx, config.DeviceID, config.DeviceName, config.IdentityPublicKey, s.listenPort)
 		if discoveryErr != nil {
 			s.log("error", "", "mDNS 发现不可用: "+discoveryErr.Error())
@@ -90,9 +114,12 @@ func (s *Service) Start(ctx context.Context) error {
 		}
 	}
 
-	s.wg.Add(2)
+	s.wg.Add(1)
 	go s.acceptLoop(ctx)
-	go s.autoLoop(ctx)
+	if !s.options.DisableAutoSync {
+		s.wg.Add(1)
+		go s.autoLoop(ctx)
+	}
 	return nil
 }
 
@@ -200,14 +227,21 @@ func (s *Service) acceptLoop(ctx context.Context) {
 			s.log("error", "", "接受 TCP 连接失败: "+err.Error())
 			continue
 		}
+		select {
+		case s.inboundSlots <- struct{}{}:
+		default:
+			_ = connection.Close()
+			continue
+		}
 		s.wg.Add(1)
 		go func() {
+			defer func() { <-s.inboundSlots }()
 			defer s.wg.Done()
 			defer connection.Close()
 			stopClose := context.AfterFunc(ctx, func() { _ = connection.Close() })
 			defer stopClose()
 			tlsConnection := tls.Server(connection, s.serverTLSConfig())
-			if err := tlsConnection.HandshakeContext(ctx); err != nil {
+			if err := inboundHandshake(ctx, tlsConnection, 8*time.Second); err != nil {
 				return
 			}
 			s.handleConnection(ctx, tlsConnection)
@@ -268,4 +302,28 @@ func (s *Service) SetTrayEnabled(enabled bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.trayEnabled = enabled
+}
+
+func inboundHandshake(ctx context.Context, connection *tls.Conn, timeout time.Duration) error {
+	handshakeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return connection.HandshakeContext(handshakeCtx)
+}
+
+// HasActiveWork avoids JSON, history copies, sorting and receipt filesystem probes.
+// Historical task metadata is inspected under its lock, with no allocation.
+func (s *Service) HasActiveWork() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.activeSync > 0 || s.activeTransferWork > 0 {
+		return true
+	}
+	s.transfers.mu.Lock()
+	defer s.transfers.mu.Unlock()
+	for _, task := range s.transfers.tasks {
+		if transferActive(task.State) {
+			return true
+		}
+	}
+	return false
 }

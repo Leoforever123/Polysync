@@ -172,7 +172,7 @@ h2 { margin: 0; font-size: clamp(35px, 4vw, 51px); line-height: 1.17; letter-spa
 .download-notes p { margin: 0; }
 .download-notes p + p { margin-top: 5px; }
 .download-notes b { color: var(--ink); }
-code { padding: 2px 5px; border-radius: 4px; background: #e2e6df; color: #365847; font-family: ui-monospace, monospace; }
+code { padding: 2px 5px; border-radius: 4px; background: #e2e6df; color: #365847; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
 
 .details-section { padding-top: 10px; }
 .details-card { min-height: 290px; padding: 55px 62px; display: grid; grid-template-columns: 1.1fr .9fr; align-items: center; gap: 70px; border-radius: 20px; background: var(--green-dark); color: white; }

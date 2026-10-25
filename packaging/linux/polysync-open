@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+if ! command -v systemctl >/dev/null 2>&1 || ! command -v xdg-open >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+    printf '%s\n' 'PolySync 菜单入口需要 systemd 用户服务、xdg-utils 和 curl。也可在终端运行 polysync -tray=false。' >&2
+    exit 1
+fi
+# Starting an already active user service is idempotent. Never create another
+# background process when the user opens the menu entry a second time.
+systemctl --user start polysync.service
+# A simple user service becomes active before its HTTP listener is ready.
+attempt=0
+while [ "$attempt" -lt 50 ]; do
+    if curl --noproxy '*' --fail --silent --max-time 0.2 http://127.0.0.1:45124/api/status >/dev/null; then
+        exec xdg-open http://127.0.0.1:45124
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.1
+done
+printf '%s\n' 'PolySync 控制台未就绪。请运行 journalctl --user -u polysync.service 查看原因。' >&2
+exit 1

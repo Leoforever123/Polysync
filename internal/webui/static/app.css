@@ -318,3 +318,13 @@ footer { border-top: 0; min-height: 76px; gap: 20px; }
 @media (prefers-reduced-motion: reduce) {
  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+#update-progress { display: block; width: 100%; height: 12px; margin: 18px 0; accent-color: var(--green, #32664e); }
+#update-progress[hidden] { display: none; }
+#update-message { overflow-wrap: anywhere; line-height: 1.7; }
+footer { flex-wrap: wrap; gap: 12px; }
+.modal-actions:has(#update-check) { flex-wrap: wrap; }
+.modal-actions:has(#update-check) .button { white-space: nowrap; }
+@media (max-width: 480px) {
+ .modal-actions:has(#update-check) { display: grid; grid-template-columns: 1fr; }
+}

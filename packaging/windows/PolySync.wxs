@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <?ifndef ProductName?><?define ProductName="PolySync"?><?endif?>
+  <?ifndef InstallName?><?define InstallName="PolySync"?><?endif?>
+  <?ifndef UpgradeCode?><?define UpgradeCode="4E49A27E-2CF4-4BE4-88CE-541D4D74110D"?><?endif?>
+  <?ifndef ApplicationGuid?><?define ApplicationGuid="5356C726-7D45-4C66-A033-5085C1A3BD40"?><?endif?>
+  <Package Name="$(var.ProductName)" Manufacturer="PolySync" Version="$(var.Version)" UpgradeCode="$(var.UpgradeCode)" Scope="perUser" Language="2052" Codepage="65001">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of PolySync is already installed." Schedule="afterInstallInitialize" />
+    <MediaTemplate EmbedCab="yes" />
+    <Property Id="INSTALLFOLDER"><RegistrySearch Id="ExistingInstallDir" Root="HKCU" Key="Software\$(var.InstallName)" Name="InstallDir" Type="raw" /></Property>
+    <Property Id="ARPCOMMENTS" Value="Personal device file synchronization and transfer." />
+    <Property Id="ARPURLINFOABOUT" Value="https://leoforever123.github.io/Polysync/" />
+    <Property Id="MSIRESTARTMANAGERCONTROL" Value="DisableShutdown" />
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="$(var.InstallName)">
+          <Component Id="Application" Guid="$(var.ApplicationGuid)">
+            <File Id="PolySyncExe" Source="$(var.Binary)" Name="polysync.exe" />
+            <File Id="PolySyncLicense" Source="LICENSE" Name="LICENSE" />
+            <File Id="PolySyncThirdPartyNotices" Source="THIRD_PARTY_NOTICES.txt" Name="THIRD_PARTY_NOTICES.txt" />
+            <RegistryValue Root="HKCU" Key="Software\$(var.InstallName)" Name="InstallDir" Value="[INSTALLFOLDER]" Type="string" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="PolySyncMenu" Name="$(var.InstallName)">
+        <Component Id="StartMenu" Guid="*">
+          <Shortcut Id="LaunchPolySync" Name="PolySync" Target="[INSTALLFOLDER]polysync.exe" WorkingDirectory="INSTALLFOLDER" />
+          <RemoveFolder Id="RemovePolySyncMenu" On="uninstall" />
+          <RegistryValue Root="HKCU" Key="Software\$(var.InstallName)" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="Main" Title="PolySync" Level="1"><ComponentRef Id="Application" /><ComponentRef Id="StartMenu" /></Feature>
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.Notice)" />
+  </Package>
+</Wix>

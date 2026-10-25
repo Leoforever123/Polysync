@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=PolySync
+Comment=Synchronize and send files between your devices
+Comment[zh_CN]=在你的设备之间同步和传送文件
+Exec=polysync-open
+Icon=polysync
+Terminal=false
+Categories=Network;FileTransfer;
+Keywords=sync;files;transfer;
+StartupNotify=false

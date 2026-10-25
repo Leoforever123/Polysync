@@ -1,0 +1,37 @@
+# Publication pending: publish the v0.4.0 asset and configure an AUR account.
+pkgname=polysync-bin
+pkgver=0.4.0
+pkgrel=1
+pkgdesc='Personal LAN file synchronization and transfer'
+arch=('x86_64')
+url='https://github.com/Leoforever123/Polysync'
+license=('LicenseRef-Proprietary')
+optdepends=('systemd: optional user background service'
+            'xdg-utils: open the local console from the application menu'
+            'curl: wait for the local console before opening the browser'
+            'zenity: native folder and save dialogs'
+            'kdialog: alternative native folder and save dialogs')
+provides=("polysync=${pkgver}")
+conflicts=('polysync')
+options=('!strip' '!debug')
+source=('polysync-open' 'polysync.service' 'polysync.desktop' 'polysync.svg' 'copyright' 'THIRD_PARTY_NOTICES.txt')
+sha256sums=('14c351ae454be46215b9ee22ec6a8fadbed27a271ad80b52f928f42cd6e65b84'
+            '0ec04ab318e7984c3b786e0a202944b2b467c9d0de492f2873d79e8130439ca6'
+            '4f29986c8af1d50305efea13e2b858456cbbc9d6fec327b8e1d3bb550c63ba50'
+            'b183afe7580738024508c5ac22bdc00aab39c7ed9b84dce7e4a4445f4f97b8a6'
+            '82eb116a0075f2199f36ca9f6e41b7bcef4c857c10e744017e3891f59d56781c'
+            '329bb87e320fe422c61420860b181a08d53eb25c0e705171fc15e00635cada0c')
+source_x86_64=("polysync-${pkgver}-linux-amd64::${url}/releases/download/v${pkgver}/polysync-linux-amd64")
+sha256sums_x86_64=('138d578a7aa19271e8b5dd5e3172bb886ba7658a0674efbdd2c3c131edd1b377')
+noextract=("polysync-${pkgver}-linux-amd64")
+
+package() {
+    install -Dm755 "${srcdir}/polysync-${pkgver}-linux-amd64" "${pkgdir}/usr/bin/polysync"
+    install -Dm755 "${srcdir}/polysync-open" "${pkgdir}/usr/bin/polysync-open"
+    install -Dm644 "${srcdir}/polysync.service" "${pkgdir}/usr/lib/systemd/user/polysync.service"
+    install -Dm644 "${srcdir}/polysync.desktop" "${pkgdir}/usr/share/applications/polysync.desktop"
+    install -Dm644 "${srcdir}/polysync.svg" "${pkgdir}/usr/share/icons/hicolor/scalable/apps/polysync.svg"
+    install -Dm644 "${srcdir}/copyright" "${pkgdir}/usr/share/doc/polysync/copyright"
+    install -Dm644 "${srcdir}/copyright" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+    install -Dm644 "${srcdir}/THIRD_PARTY_NOTICES.txt" "${pkgdir}/usr/share/doc/polysync/THIRD_PARTY_NOTICES.txt"
+}

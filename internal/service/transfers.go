@@ -23,17 +23,34 @@ type transferOffer struct {
 
 func (s *Service) beginTransferWork(ctx context.Context) (context.Context, func(), error) {
 	s.mu.Lock()
+	if s.updating {
+		s.mu.Unlock()
+		return nil, nil, errors.New("正在安装更新，请稍后再试")
+	}
 	if err := s.ctx.Err(); err != nil {
 		s.mu.Unlock()
 		return nil, nil, err
 	}
+	s.activeTransferWork++
 	s.wg.Add(1)
 	s.mu.Unlock()
 	ctx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(s.ctx, cancel)
-	return ctx, func() { stop(); cancel(); s.wg.Done() }, nil
+	return ctx, func() {
+		stop()
+		cancel()
+		s.mu.Lock()
+		s.activeTransferWork--
+		s.mu.Unlock()
+		s.wg.Done()
+	}, nil
 }
 func (s *Service) CreateTransfer(peerID string, files []TransferFile) (TransferTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.updating {
+		return TransferTask{}, errors.New("正在安装更新，请稍后再试")
+	}
 	peer, ok := s.store.PairedDevice(peerID)
 	if !ok {
 		return TransferTask{}, errors.New("请先配对目标设备")
@@ -305,6 +322,13 @@ func (s *Service) sendTransfer(ctx context.Context, id string) error {
 	return nil
 }
 func (s *Service) handleTransfer(ctx context.Context, connection *tls.Conn, framer *protocol.Framer, hello protocol.Hello) {
+	workCtx, done, workErr := s.beginTransferWork(ctx)
+	if workErr != nil {
+		_ = framer.WriteJSON(protocol.Result{Message: workErr.Error()})
+		return
+	}
+	defer done()
+	ctx = workCtx
 	peer, err := s.requirePaired(connection, hello.DeviceID)
 	if err != nil {
 		_ = framer.WriteJSON(protocol.Result{Type: "transfer_ready", Message: err.Error()})

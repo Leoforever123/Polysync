@@ -476,6 +476,9 @@ func (t *nativeTray) buildMenu() (menu uintptr, actions map[uintptr]func(), err 
 			return 0, nil, err
 		}
 	}
+	if err := add(menu, "版本与更新…", false, func() { t.openRoute("#updates") }); err != nil {
+		return 0, nil, err
+	}
 	if err := add(menu, "使用引导", false, func() { t.openRoute("#tour") }); err != nil {
 		return 0, nil, err
 	}

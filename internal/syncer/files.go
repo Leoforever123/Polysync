@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -129,6 +130,19 @@ func DeleteFile(root, relative, historyRoot string) error {
 }
 
 func WriteResolvedFile(root, relative, historyRoot string, data []byte, mode os.FileMode) error {
+	return WriteResolvedStream(context.Background(), root, relative, historyRoot, bytes.NewReader(data), int64(len(data)), "", mode)
+}
+
+// WriteResolvedStream stages and verifies content before touching the destination
+// or its history. Memory usage is bounded independently of the object size.
+func WriteResolvedStream(ctx context.Context, root, relative, historyRoot string, input io.Reader, size int64, expectedHash string, mode os.FileMode) error {
+	if size < 0 || size > 16<<30 {
+		return errors.New("invalid resolved file size")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	destination, err := SecureJoin(root, relative)
 	if err != nil {
 		return err
@@ -145,7 +159,17 @@ func WriteResolvedFile(root, relative, historyRoot string, data []byte, mode os.
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
-	if _, err := tmp.Write(data); err != nil {
+	hash := sha256.New()
+	n, err := io.CopyBuffer(io.MultiWriter(tmp, hash), &contextReader{ctx: ctx, reader: io.LimitReader(input, size+1)}, make([]byte, 64<<10))
+	if err != nil {
+		tmp.Close()
+		return err
+	}
+	if n != size || (expectedHash != "" && hex.EncodeToString(hash.Sum(nil)) != expectedHash) {
+		tmp.Close()
+		return errors.New("conflict object size or hash mismatch")
+	}
+	if err := ctx.Err(); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -269,4 +293,16 @@ func removeEmptyParents(root, current string) {
 		}
 		current = filepath.Dir(current)
 	}
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }

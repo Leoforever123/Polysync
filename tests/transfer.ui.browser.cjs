@@ -10,7 +10,7 @@ let settings = { autoReceive: true, directory: "D:\\PolySync Inbox" }, tasks=[];
 const server = http.createServer((req,res) => {
  if (req.url==="/api/status" || req.url==="/api/transfers") {res.setHeader("Content-Type","application/json");res.end(JSON.stringify(req.url==="/api/status"?status:{settings,tasks}));return;}
  const name = req.url==="/"?"index.html":req.url.slice(1);
- if (!["index.html","app.js","transfer.js","tour.js","app.css","transfer.css"].includes(name)) {res.writeHead(404);res.end();return;}
+ if (!["index.html","app.js","transfer.js","tour.js","update.js","app.css","transfer.css"].includes(name)) {res.writeHead(404);res.end();return;}
  res.setHeader("Content-Type",name.endsWith(".css")?"text/css":name.endsWith(".js")?"text/javascript":"text/html");res.end(fs.readFileSync(path.join(staticDir,name)));
 });
 (async()=>{
@@ -104,6 +104,38 @@ const server = http.createServer((req,res) => {
   await page.route("**/api/transfers/received?files=false",async route=>{assert.equal(route.request().method(),"DELETE");removed=true;tasks=[];await route.fulfill({json:{ok:true}});});
   await page.locator('[data-transfer-action="remove"]').click();assert.equal(await page.locator("#transfer-delete-files").isChecked(),false);
   await page.locator("#transfer-remove-form").getByRole("button",{name:"移除记录",exact:true}).click();await page.getByRole("dialog").waitFor({state:"hidden"});assert.equal(removed,true);
+
+  let updateState={current:'0.4.0',phase:'idle',message:'点击检查更新',supported:true,available:false,token:'fixture-token'};
+  let updateReads=0,installAttempts=0;
+  await page.route('**/api/update',async route=>{updateReads++;await route.fulfill({json:updateState});});
+  await page.route('**/api/update/*',async route=>{
+   assert.equal(route.request().headers()['x-polysync-update-token'],'fixture-token');
+   const action=route.request().url().split('/').at(-1);
+   if(action==='check')updateState={...updateState,phase:'available',latest:'0.4.1',available:true,message:'发现新版本'};
+   if(action==='download')updateState={...updateState,phase:'ready',downloaded:100,total:100,message:'下载和校验完成'};
+   if(action==='install'){installAttempts++;if(installAttempts===1){updateState.message='仍有同步正在进行，请完成后再安装';await route.fulfill({status:409,json:{error:updateState.message}});return;}updateState={...updateState,phase:'installing',message:'正在重启'};}
+   await route.fulfill({json:updateState});
+  });
+  await page.setViewportSize({width:1365,height:1050});
+  await page.locator('#open-update').click();await page.locator('#update-check').waitFor();
+  await page.waitForFunction(()=>!document.querySelector('#update-check').disabled);
+  assert.equal(await page.locator('#update-install').isDisabled(),true);
+  await page.locator('#update-check').click();await page.getByText('发现新版本',{exact:true}).waitFor();
+  await page.locator('#update-download').focus();await page.waitForTimeout(1700);
+  assert.equal(await page.evaluate(()=>document.activeElement.id),'update-download');
+  await page.screenshot({path:path.join(output,'update-desktop.png')});
+  await page.locator('#update-download').click();await page.waitForFunction(()=>!document.querySelector('#update-install').disabled);
+  await page.locator('#update-install').click();await page.getByText('仍有同步正在进行，请完成后再安装',{exact:true}).waitFor();
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  assert.equal(await page.locator('#update-install').evaluate(node=>getComputedStyle(node).whiteSpace),'nowrap');
+  const checkBox=await page.locator('#update-check').boundingBox(),installBox=await page.locator('#update-install').boundingBox();
+  assert.ok(installBox.y>checkBox.y+checkBox.height,'narrow screen update buttons stack vertically');
+  await page.screenshot({path:path.join(output,'update-mobile.png')});
+  await page.waitForFunction(()=>!document.querySelector('#update-install').disabled);
+  await page.locator('#update-install').click();await page.getByText('正在重启',{exact:true}).waitFor();
+  await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>document.activeElement.id),'open-update');
+  const readsAfterClose=updateReads;await page.waitForTimeout(1900);assert.equal(updateReads,readsAfterClose);
   assert.deepEqual(errors,[]);
   console.log("Transfer UI checks passed: all tutorial steps, replay/skip/focus, desktop/mobile, settings, multipart upload, received files, save dispatch, polling focus, removal, reduced motion.");
  }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
