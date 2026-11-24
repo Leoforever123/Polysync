@@ -1,6 +1,6 @@
 # Android 预览版
 
-当前版本为 `0.5.1-dev.6`（versionCode 6），适用于 Android 10 及以上的 arm64 设备。已经使用 dev.5「PolySync 预览版」的用户可直接覆盖安装，设备身份、配对和工作区保留。预览包名为 `org.polysync.android.preview`。
+当前版本为 `0.5.2-dev.6`（versionCode 6），适用于 Android 10 及以上的 arm64 设备。已经使用 dev.5「PolySync 预览版」的用户可直接覆盖安装，设备身份、配对和工作区保留。预览包名为 `org.polysync.android.preview`。
 
 dev.4 及更早的「PolySync 调试版」使用独立的包名与签名，可与预览版并装。从调试版首次使用预览版，需要重新配对并接受文件夹邀请。旧应用中的接收文件和本地修改可从原应用导出。
 
@@ -96,11 +96,11 @@ Windows 的 `desktopRoot` 参数应使用正斜杠（例如 `E:/path/to/test/wor
 apps/android/test-upgrade.sh emulator-5584 /path/to/dev5.apk /path/to/dev6.apk
 ```
 
-### dev.6 验证结果
+### 0.5.2-dev.6 验证结果
 
-Android 15 的 x86_64 模拟器已从 dev.5 覆盖升级到 dev.6。升级前通过验证码与临时桌面配对，并在已有工作区保存校验文件。升级后应用 UID、设备身份、配对配置和工作区文件内容均保持一致。从「随传」仍能选择原接收设备，从「同步 → 查看与导出」能将原文件交给系统保存。四项 Kotlin 单元测试、八项 Android instrumentation 和另行执行的 Linux 桌面与 Android 互通测试通过。Android lint 报告 0 errors、3 warnings。
+本次使用两台全新 Android 15 模拟器，先安装已发布的 0.5.0-dev.5 并核对 versionCode 5。x86_64 模拟器随后覆盖升级到 0.5.2-dev.6。升级前通过验证码与临时桌面配对，并在已有工作区保存校验文件。升级后应用 UID、设备身份、配对配置和工作区文件内容均保持一致。从「随传」仍能选择原接收设备，从「同步 → 查看与导出」能将原文件交给系统保存。四项 Kotlin 单元测试、八项 Android instrumentation 和另行执行的 Linux 桌面与 Android 互通测试通过。Android lint 报告 0 errors、3 warnings。
 
-ARM64 发布 APK 也在支持 ARM 包安装的 Android 15 模拟器上通过了 dev.5 → dev.6 覆盖安装和私有数据校验，dev.4 调试版可继续并装。签名与 dev.5 一致，ZIP 16 KiB 对齐检查通过。dev.6 安装包大小为 12,009,620 字节，安装后读取的 SHA-256 为 `0cfee0aeb51be9d6d9feab635564726510447d5989adec9c4bf64c26aa7efc4d`，与发布文件一致。实体 ARM 手机运行仍待验证。下文记录了该模拟器的 ARM 转译限制。
+ARM64 发布 APK 也在支持 ARM 包安装的 Android 15 模拟器上通过了 dev.5 → dev.6 覆盖安装和私有数据校验，dev.4 调试版可继续并装。签名与 dev.5 一致，ZIP 16 KiB 对齐检查通过。dev.6 安装包大小为 12,009,556 字节，安装后读取的 SHA-256 为 `cd5b9a35ab35f72142ff3d24dc18ed4fb95b01d8476f62b778f3fe9750ca562b`，与发布文件一致。实体 ARM 手机运行仍待验证。下文记录了该模拟器的 ARM 转译限制。
 
 ## dev.5 的原生交互与互通验证
 
@@ -150,12 +150,12 @@ ARM64 发布 APK 也在支持 ARM 包安装的 Android 15 模拟器上通过了 
 
 ## 随桌面版本发布实验包
 
-用本机预览签名构建、验证 APK 后，将发行文件放入仓库的 Git LFS 存储，源码中只保存指针。下面以桌面 v0.5.1 为例。保持签名密钥在原构建环境中。
+用本机预览签名构建、验证 APK 后，将发行文件放入仓库的 Git LFS 存储，源码中只保存指针。下面以桌面 v0.5.2 为例。保持签名密钥在原构建环境中。
 
 ```sh
 mkdir -p packaging/android
-git lfs clean < dist/polysync-android-arm64-preview.apk > packaging/android/preview-v0.5.1.lfs
-git lfs push --object-id origin "$(sed -n 's/^oid sha256://p' packaging/android/preview-v0.5.1.lfs)"
+git lfs clean < dist/polysync-android-arm64-preview.apk > packaging/android/preview-v0.5.2.lfs
+git lfs push --object-id origin "$(sed -n 's/^oid sha256://p' packaging/android/preview-v0.5.2.lfs)"
 ```
 
 正式标签的构建会通过指针取回同一份 APK，检查 Android 签名与 SHA-256 后把它放进 Release。普通源码检出不需要下载这个安装包。

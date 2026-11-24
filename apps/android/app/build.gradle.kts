@@ -10,7 +10,7 @@ android {
         minSdk = 29
         targetSdk = 36
         versionCode = 6
-        versionName = "0.5.1-dev.6"
+        versionName = "0.5.2-dev.6"
         ndk { abiFilters += providers.gradleProperty("polysyncAbi").orElse("arm64-v8a").get() }
         testInstrumentationRunner = "android.test.InstrumentationTestRunner"
     }
