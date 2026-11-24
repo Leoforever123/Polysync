@@ -94,11 +94,11 @@ class MainActivity : Activity() {
         val nav = row().apply { setPadding(16.dp(), 8.dp(), 16.dp(), 8.dp()); background = design.shape(this@MainActivity, design.surface, 24) }
         for ((key, icon, title) in listOf(Triple("设备", "devices", "设备"), Triple("随传", "send", "随传"), Triple("工作区", "folder", "同步"))) {
             val item = column().apply {
-                gravity = Gravity.CENTER; setPadding(8.dp(), 8.dp(), 8.dp(), 8.dp())
+                gravity = Gravity.CENTER; minimumHeight = 64.dp(); setPadding(8.dp(), 8.dp(), 8.dp(), 8.dp())
                 isClickable = true; isFocusable = true; contentDescription = title; tag = "nav:$key"
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
                 addView(Mark(this@MainActivity, icon).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }, LinearLayout.LayoutParams(24.dp(),24.dp()))
-                addView(text(title, 12, bold=true).apply { setPadding(0,5.dp(),0,0); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO })
+                addView(text(title, 12, bold=true).apply { gravity = Gravity.CENTER; setPadding(0,5.dp(),0,0); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO })
                 background = android.graphics.drawable.RippleDrawable(
                     android.content.res.ColorStateList.valueOf((design.green and 0x00ffffff) or 0x22000000),
                     android.graphics.drawable.StateListDrawable().apply {
@@ -109,7 +109,7 @@ class MainActivity : Activity() {
                 setOnClickListener { afterPair = null; switchPage(key) }
             }
             navigation[key] = item
-            nav.addView(item, LinearLayout.LayoutParams(0, 64.dp(), 1f).apply { marginStart = 4.dp(); marginEnd = 4.dp() })
+            nav.addView(item, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = 4.dp(); marginEnd = 4.dp() })
         }
         outer.addView(nav); setContentView(outer); display()
         if (!SyncService.userStopped(this)) startSync()
@@ -334,10 +334,10 @@ class MainActivity : Activity() {
                         else { space(c,14);c.addView(text(r.getString("code"),30,design.green,true));space(c,8);c.addView(text("请在另一台设备输入此验证码",12,design.muted)) }
                         action(c,"拒绝",id="reject:$id") { work({request("DELETE","/api/pair/requests/$id");"已拒绝"}) }
                     }
-                    section("附近设备","自动发现")
-                    val discoveryLabel=text(if(running) SyncService.discoveryStatus else "启动服务后自动发现",12,design.muted); labels["discovery"]=discoveryLabel; list.addView(discoveryLabel);space(list,12)
+                    section("附近设备")
+                    val discoveryLabel=text(if(running) SyncService.discoveryStatus else "启动服务后自动发现",12,design.muted); labels["discovery"]=discoveryLabel; list.addView(discoveryLabel)
                     val found=(0 until nearby.length()).map{nearby.getJSONObject(it)}.filter{it.optBoolean("online") && !it.optBoolean("paired")}
-                    if (found.isEmpty() && running && peers.length() == 0) empty("radar","正在查找设备","让两台设备连接同一 Wi-Fi，并在对方打开 PolySync。")
+                    if (found.isEmpty() && running && peers.length() == 0) empty("radar","在另一台设备上打开 PolySync","连接同一 Wi-Fi 后，附近设备会出现在这里。")
                     for(d in found) {
                         val c=card();c.addView(text(d.optString("name"),18,bold=true));space(c,6);c.addView(text("局域网可连接",12,design.green))
                         asyncAction(c,"连接设备","正在连接…",true,"pair:${d.getString("id")}", { pairStart("",d.getString("id")) }) { if (dialog == null) confirmPair(it) }
@@ -400,7 +400,7 @@ class MainActivity : Activity() {
                         val s=shares.getJSONObject(i);val id=s.getString("id");val c=card();c.addView(text(s.optString("name"),18,bold=true));space(c,8);val label=text("",12,design.muted);labels[id]=label;c.addView(label)
                         if(running && s.optString("state")=="active") asyncAction(c,"立即同步","正在同步…",true,"sync:$id",{ request("POST","/api/shares/$id/sync"); "已开始同步" })
                         val members = s.optJSONArray("members")?.objects().orEmpty()
-                        if (s.optString("state") in setOf("active", "pending", "disconnected")) {
+                        if (s.optString("state") in setOf("active", "pending", "disconnected") || (s.optString("state") == "unpaired" && s.optString("localRole") == "collaborator")) {
                             val role = s.optString("localRole").ifBlank { "collaborator" }
                             for (member in members.filter { it.optString("state") != "unpaired" }) {
                                 val name = peers.objects().firstOrNull { it.optString("id") == member.optString("deviceId") }?.optString("name") ?: "已配对设备"
@@ -418,7 +418,7 @@ class MainActivity : Activity() {
                             if (running && connected.isNotEmpty()) action(c,"成员与权限",id="manage:$id") {
                                 manageMembers(s,connected,peers.objects())
                             }
-                            val existing = members.filter { it.optString("state") != "unpaired" }.map { it.optString("deviceId") }.toSet() + s.optString("peerDeviceId")
+                            val existing = if (s.optString("localRole").isBlank()) setOf(s.optString("peerDeviceId")) else connected.map { it.optString("deviceId") }.toSet()
                             val candidates = peers.objects().filter { it.optString("id") !in existing }
                             if (running && role != "follower" && candidates.isNotEmpty()) action(c,"邀请设备",id="member:$id") { workspaceInvite(candidates, s) }
                             if (running && s.optString("state") == "active" && (role != "follower" || members.any { it.optBoolean("allowWriteBack") && !it.optBoolean("writeBackPending") })) action(c,"导入文件副本",id="import:$id") { chooseImport("",id) }
@@ -431,7 +431,11 @@ class MainActivity : Activity() {
             }
             if(focused!=null) list.findViewWithTag<View>(focused)?.requestFocus()
         }
-        labels["discovery"]?.text=if(running) SyncService.discoveryStatus else "启动服务后自动发现"
+        labels["discovery"]?.let { label ->
+            val detail = if (running) SyncService.discoveryStatus else "启动接收服务后可发现设备"
+            if (label.text != detail) label.text = detail
+            label.visibility = if (detail == "正在发现同一网络的设备") View.GONE else View.VISIBLE
+        }
         if (page == "随传") updateTransfers()
         for (s in shares.objects()) {
             val status = when (s.optString("state")) {
@@ -568,7 +572,7 @@ class MainActivity : Activity() {
                         confirmOperation(options[index],detail,options[index],"正在保存…",
                             { request("PUT",endpoint,JSONObject().put("allowWriteBack",!writable)) },if (writable) "已关闭回传" else "已允许对方核对回传")
                     } else {
-                        confirmOperation("停止与$device同步？","此手机将停止与它同步“$folder”。双方已保存的文件和设备配对会保留。",
+                        confirmOperation("停止与${device}同步？","此手机将停止与它同步“$folder”。双方已保存的文件和设备配对会保留。",
                             "停止同步","正在停止…",{ request("DELETE",endpoint) },"已停止与此设备同步")
                     }
                 }.setNegativeButton("关闭",null).create())
@@ -614,7 +618,7 @@ class MainActivity : Activity() {
                 back.visibility = if (id == follower.id) View.VISIBLE else View.GONE
                 hint.text = if (id == follower.id) "此设备接收本机的文件副本。开启回传后，它的修改也会同步回来。" else "双方的修改会同步给其他成员。"
             }
-            val current = AlertDialog.Builder(this).setTitle("邀请$name").setView(fields)
+            val current = AlertDialog.Builder(this).setTitle("邀请$name").setView(ScrollView(this).apply { addView(fields) })
                 .setNegativeButton("取消",null).setPositiveButton("发送邀请",null).create()
             showDialog(current)
             current.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {

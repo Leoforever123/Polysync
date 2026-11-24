@@ -3,6 +3,11 @@ package org.polysync.android
 import android.app.AlertDialog
 import android.view.View
 import android.view.ViewGroup
+import android.view.FrameMetrics
+import android.view.Window
+import android.os.Handler
+import android.os.HandlerThread
+import java.util.Collections
 import android.widget.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -28,6 +33,7 @@ class DesignDeviceTest : ForegroundDeviceTest() {
     }
 
     fun testNavigationKeepsNativeStructureAndEmptyStates() {
+        lateinit var unpair: AlertDialog
         onScreen {
             val snapshot = field("snapshot")
             val original = snapshot.get(screen)
@@ -55,9 +61,11 @@ class DesignDeviceTest : ForegroundDeviceTest() {
                 assertTrue(textIn(current.window!!.decorView,"对方需单独取消配对"))
                 assertTrue(textIn(current.window!!.decorView,"查看与导出"))
                 current.getButton(AlertDialog.BUTTON_NEGATIVE).performClick()
-                assertFalse(current.isShowing)
+                unpair = current
             } finally { snapshot.set(screen,original); display() }
         }
+        instrumentation.waitForIdleSync()
+        onScreen { assertFalse(unpair.isShowing) }
     }
 
     fun testTransferHistoryKeepsRowsDuringProgressAndPrepend() {
@@ -91,6 +99,47 @@ class DesignDeviceTest : ForegroundDeviceTest() {
         }
     }
 
+    fun testLongHistoryScrollMeasurement() {
+        val old = field("transfers").get(screen)
+        val frames = Collections.synchronizedList(mutableListOf<Pair<Long,Long>>())
+        val frameThread = HandlerThread("PolysyncFrameMetrics").apply { start() }
+        val observer = Window.OnFrameMetricsAvailableListener { _, frame, _ ->
+            frames.add(frame.getMetric(FrameMetrics.INTENDED_VSYNC_TIMESTAMP) to frame.getMetric(FrameMetrics.TOTAL_DURATION))
+        }
+        val scroll = field("scroll").get(screen) as ScrollView
+        try {
+            onScreen {
+                // Keep the synthetic history in place while real platform rendering is measured.
+                field("resumed").setBoolean(screen,false)
+                val tasks = JSONArray()
+                repeat(1000) { i ->
+                    tasks.put(JSONObject().put("id","s$i").put("state","complete").put("direction","send").put("total",4096)
+                        .put("files",JSONArray().put(JSONObject().put("name","工作记录$i.txt"))))
+                }
+                field("transfers").set(screen,tasks)
+                tagged("nav:随传").performClick()
+            }
+            instrumentation.waitForIdleSync()
+            Thread.sleep(400)
+            onScreen { screen.window.addOnFrameMetricsAvailableListener(observer,Handler(frameThread.looper)); scroll.fling(4800) }
+            Thread.sleep(650)
+            onScreen { scroll.fling(-4800) }
+            Thread.sleep(650)
+            onScreen { screen.window.removeOnFrameMetricsAvailableListener(observer) }
+            val samples = synchronized(frames) { frames.toList() }
+            val sorted = samples.map { it.second }.sorted()
+            assertTrue("Expected scrolling frames", sorted.size >= 10)
+            val p95 = sorted[((sorted.size - 1)*.95).toInt()] / 1_000_000.0
+            val gaps = samples.zipWithNext { a,b -> b.first - a.first }.sorted()
+            val p95Interval = gaps[((gaps.size - 1)*.95).toInt()] / 1_000_000.0
+            val over25 = gaps.count { it > 25_000_000L }
+            android.util.Log.i("PolySyncTiming", "1000 tasks / 20 rows, frames=${sorted.size} p95RenderMs=$p95 p95IntervalMs=$p95Interval gapsOver25ms=$over25")
+        } finally {
+            frameThread.quitSafely()
+            onScreen { field("transfers").set(screen,old); field("resumed").setBoolean(screen,true); display() }
+        }
+    }
+
     fun testSharingRolesStayWithTheFolder() {
         onScreen {
             val snapshot = field("snapshot")
@@ -120,7 +169,12 @@ class DesignDeviceTest : ForegroundDeviceTest() {
                 display()
                 assertNotNull(tagged("preview:w")); assertNull(tagged("import:w"))
                 tagged("manage:w").performClick()
-                assertTrue(textIn(dialog().window!!.decorView,"停止与此设备同步")); dialog().dismiss()
+                assertEquals("停止与此设备同步",dialog().listView.adapter.getItem(0).toString()); dialog().dismiss()
+                share.put("state","unpaired").put("localRole","collaborator").put("peerDeviceId","a").put("members",JSONArray())
+                state.getJSONArray("pairedDevices").remove(1)
+                display()
+                assertNotNull("A newly paired device can be invited to the retained folder",tagged("member:w"))
+                assertNull(tagged("sync:w")); assertNotNull(tagged("files:w"))
             } finally { snapshot.set(screen,original); display() }
         }
     }

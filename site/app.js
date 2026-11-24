@@ -43,9 +43,11 @@ function selectRecommendation() {
 const picker = document.querySelector("#download-platform");
 function filterDownloads() {
   const selection = picker?.value || "all";
-  for (const card of document.querySelectorAll(".download-card")) {
+  const cards = [...document.querySelectorAll(".download-card")];
+  for (const card of cards) {
     card.hidden = Boolean(card.dataset.unavailable) || (selection !== "all" && selection !== card.dataset.platform);
   }
+  document.querySelector("#no-platform-download").hidden = cards.some(card => !card.hidden);
   for (const note of document.querySelectorAll("[data-note]")) {
     note.hidden = selection !== "all" && !note.dataset.note.split(" ").includes(selection);
   }

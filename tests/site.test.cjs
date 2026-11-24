@@ -12,7 +12,8 @@ function card(platform, asset, kind) {
 
 async function loadPage(navigator, cards, names, extras = [], commands = []) {
   const button = {}, label = {}, version = {}, picker = { addEventListener() {} };
-  const ids = { '#android-note': {}, '#recommended-download': button, '#recommended-label': label, '#download-platform': picker, '#platform-picker': {} };
+  const empty = {};
+  const ids = { '#no-platform-download': empty, '#android-note': {}, '#recommended-download': button, '#recommended-label': label, '#download-platform': picker, '#platform-picker': {} };
   const groups = { '.download-card': cards, '[data-asset]': [...cards, ...extras], '[data-version]': [version], '[data-install]': commands };
   const context = { navigator, document: {
     querySelector: id => ids[id], querySelectorAll: selector => groups[selector] || [],
@@ -21,7 +22,7 @@ async function loadPage(navigator, cards, names, extras = [], commands = []) {
     return { ok: true, json: async () => ({ tag_name: 'v0.5.0', assets: names.map(name => ({name, browser_download_url: 'new/' + name})) }) };
   } };
   await vm.runInNewContext(source, context);
-  return { button, label, version, picker };
+  return { button, label, version, picker, empty };
 }
 
 const windows = 'polysync-windows-amd64';
@@ -65,7 +66,8 @@ test('iPadOS, macOS, Android and offline Linux offer the relevant choice', async
 
 test('missing platform assets do not silently download an old desktop version', async () => {
   const win = card('windows', windows + '.msi');
-  const {button} = await loadPage({platform: 'Win32'}, [win], ['SHA256SUMS.txt']);
+  const {button, empty} = await loadPage({platform: 'Win32'}, [win], ['SHA256SUMS.txt']);
+  assert.equal(empty.hidden, false);
   assert.equal(win.hidden, true);
   assert.equal(button.href, '#downloads');
 });

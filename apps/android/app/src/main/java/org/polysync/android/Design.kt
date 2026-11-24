@@ -35,7 +35,7 @@ class Design(c: Context) {
         setTextColor(if (primary) onAccent else green)
         minimumHeight = dp(c, 48); minHeight = dp(c, 48); setPadding(dp(c, 16), dp(c, 10), dp(c, 16), dp(c, 10))
         val states = StateListDrawable().apply {
-            addState(intArrayOf(android.R.attr.state_focused), shape(c, if(primary) green else mint, 16, green))
+            addState(intArrayOf(android.R.attr.state_focused), shape(c, if(primary) green else mint, 16, if(primary) ink else green))
             addState(intArrayOf(), shape(c, if (primary) green else surface, 16, if (primary) 0 else line))
         }
         background = RippleDrawable(ColorStateList.valueOf((green and 0x00ffffff) or 0x33000000), states, shape(c, Color.WHITE, 16))

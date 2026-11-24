@@ -336,15 +336,20 @@ func (e *Engine) workspace(id string) (string, error) {
 	}
 	// Android may return different absolute names for the same private data directory.
 	// Compare the real parent on both sides, while refusing changes to the workspace root itself.
-	parent, err := filepath.EvalSymlinks(filepath.Dir(share.Path))
+	managed := filepath.Join(e.dir, "workspaces")
+	expected, err := os.Stat(managed)
+	if err != nil {
+		return "", err
+	}
+	parent, err := os.Stat(filepath.Dir(share.Path))
 	if err != nil {
 		return "", err
 	}
 	name := filepath.Base(share.Path)
-	if parent != filepath.Join(e.dir, "workspaces") || !safeName(name) {
+	if !os.SameFile(parent, expected) || !safeName(name) {
 		return "", errors.New("工作区不属于此应用")
 	}
-	path := filepath.Join(parent, name)
+	path := filepath.Join(managed, name)
 	info, err := os.Lstat(path)
 	if err != nil {
 		return "", err
