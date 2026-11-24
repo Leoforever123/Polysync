@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -148,7 +149,7 @@ func (s *Service) inviteGroup(ctx context.Context, seed model.Share, member memb
 		} else if err := promoteLegacy(sh); err != nil {
 			return err
 		}
-		if sh.LocalRole != model.RoleCollaborator || sh.State == "unpaired" {
+		if sh.LocalRole != model.RoleCollaborator {
 			return errors.New("请在协作设备上邀请成员")
 		}
 		if m, ok := shareMember(*sh, dev.ID); ok {
@@ -212,7 +213,11 @@ func (s *Service) handleGroupInvite(conn *tls.Conn, f *protocol.Framer, hello pr
 	if err := f.ReadJSONLimit(&req, 64<<10); err != nil {
 		return err
 	}
-	if req.Type != "group_invite" || !validRole(req.Role, req.AllowWriteBack) || req.ShareID == "" || len(req.ShareID) > 128 || strings.ContainsAny(req.ShareID, "/\\") || req.ShareID == "." || req.ShareID == ".." || req.ID == "" || len(req.ID) > 128 || strings.TrimSpace(req.Name) == "" {
+	validID := func(id string, size int) bool {
+		bytes, err := hex.DecodeString(id)
+		return err == nil && len(bytes) == size && id == strings.ToLower(id)
+	}
+	if req.Type != "group_invite" || !validRole(req.Role, req.AllowWriteBack) || !validID(req.ShareID, 12) || !validID(req.ID, 16) || strings.TrimSpace(req.Name) == "" {
 		return errors.New("无效的文件夹邀请")
 	}
 	if sh, ok := s.store.Share(req.ShareID); ok {
@@ -220,7 +225,7 @@ func (s *Service) handleGroupInvite(conn *tls.Conn, f *protocol.Framer, hello pr
 			return f.WriteJSON(protocol.Result{Type: "result", OK: true})
 		}
 		_, samePeer := shareMember(sh, dev.ID)
-		if sh.State == "unpaired" || (sh.LocalRole != "" && sh.LocalRole != req.Role) || (sh.LocalRole == model.RoleFollower && len(sh.Members) > 0 && !samePeer) || (sh.LocalRole == "" && req.Role != model.RoleCollaborator) {
+		if (sh.LocalRole != "" && sh.LocalRole != req.Role) || (sh.LocalRole == model.RoleFollower && len(sh.Members) > 0 && !samePeer) || (sh.LocalRole == "" && req.Role != model.RoleCollaborator) {
 			return errors.New("跟随设备只能连接一个上游")
 		}
 	}
@@ -288,7 +293,7 @@ func (s *Service) acceptGroup(ctx context.Context, inv model.ShareInvitation, di
 			if err := promoteLegacy(sh); err != nil {
 				return err
 			}
-			if sh.State == "unpaired" || sh.LocalRole != inv.Role || filepath.Clean(sh.Path) != path {
+			if sh.LocalRole != inv.Role || filepath.Clean(sh.Path) != path {
 				return errors.New("邀请与本机已有文件夹角色不一致")
 			}
 			for i, m := range sh.Members {

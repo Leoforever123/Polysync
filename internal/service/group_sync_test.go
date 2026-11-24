@@ -17,6 +17,7 @@ import (
 
 	"polysync/internal/model"
 	"polysync/internal/store"
+	"polysync/internal/syncer"
 )
 
 type groupTestNode struct {
@@ -170,7 +171,9 @@ func TestGroupMeshSyncsOfflineAndMergesConcurrentEdits(t *testing.T) {
 	}
 	writeTestFile(t, b.dir, "notes.txt", "B edition")
 	writeTestFile(t, c.dir, "notes.txt", "C edition")
-	groupSync(t, id, b, c)
+	if err := b.s.SyncShare(t.Context(), id, true); err == nil || !strings.Contains(err.Error(), "已与 1 台设备同步") {
+		t.Fatalf("normal sync did not report B-C success with A offline: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(c.dir, "obsolete.txt")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("C did not apply deletion: %v", err)
 	}
@@ -388,5 +391,81 @@ func TestGroupReceiveOnlyOfferRejectsRecordsBeforeFetchingContent(t *testing.T) 
 	}
 	if err := validateGroupOffer(nil, true); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGroupRejoinedEmptyFolderDownloadsAfterLocalRemoval(t *testing.T) {
+	ns := groupNodes(t, 2)
+	a, b := ns[0], ns[1]
+	writeTestFile(t, a.dir, "keep", "authoritative")
+	id := groupLink(t, "", a, b, model.RoleCollaborator, false)
+	old, _ := b.s.store.Share(id)
+	memberRequest(t, b, "DELETE", "/api/shares/"+id, nil, 2)
+	memberRequest(t, a, "DELETE", "/api/shares/"+id+"/members/"+b.id, nil, 2)
+	assertTestFile(t, b.dir, "keep", "authoritative")
+	b.dir = t.TempDir()
+	groupLink(t, id, a, b, model.RoleCollaborator, false)
+	groupSync(t, id, b, a)
+	assertTestFile(t, a.dir, "keep", "authoritative")
+	assertTestFile(t, b.dir, "keep", "authoritative")
+	newShare, _ := b.s.store.Share(id)
+	if old.ReplicaID == newShare.ReplicaID {
+		t.Fatal("new local directory reused an old deletion ledger")
+	}
+}
+
+func TestGroupJournalRecoversAppliedFilesAndPreservesInterveningEdit(t *testing.T) {
+	entry := func(name, hash string) model.GroupRevision {
+		return model.GroupRevision{Entry: model.Entry{Path: name, Hash: hash}, Clock: map[string]uint64{"peer": 2}}
+	}
+	state := model.GroupState{Records: model.Revisions{"saved": entry("saved", "old")}, Pending: model.Revisions{"saved": entry("saved", "planned"), "applied": entry("applied", "installed")}}
+	current := map[string]model.Entry{"saved": {Path: "saved", Hash: "new user edit"}, "applied": {Path: "applied", Hash: "installed"}}
+	if err := observeGroup(&state, current, "here", true); err != nil {
+		t.Fatal(err)
+	}
+	if state.Pending != nil || state.Records["applied"].Clock["here"] != 0 || state.Records["saved"].Hash != "new user edit" || state.Records["saved"].Clock["here"] != 1 {
+		t.Fatalf("incorrect recovered ledger: %#v", state)
+	}
+}
+
+func TestGroupAliasedDirectoryCannotBecomeSecondSyncRoot(t *testing.T) {
+	ns := groupNodes(t, 2)
+	groupLink(t, "", ns[0], ns[1], model.RoleCollaborator, false)
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(ns[0].dir, alias); err != nil {
+		t.Skipf("directory symlink unavailable: %v", err)
+	}
+	memberRequest(t, ns[0], "POST", "/api/shares/invite", map[string]any{"path": alias, "role": model.RoleCollaborator, "deviceId": ns[1].id}, 4)
+	if len(ns[0].s.store.Config().Shares) != 1 {
+		t.Fatal("nested grant via symlink alias")
+	}
+	if _, err := syncer.Scan(t.Context(), alias); err == nil {
+		t.Fatal("changed root symlink treated as an empty directory")
+	}
+}
+
+func TestGroupRepairedDevicesRequireFreshInvitation(t *testing.T) {
+	ns := groupNodes(t, 2)
+	a, b := ns[0], ns[1]
+	writeTestFile(t, a.dir, "note", "base")
+	id := groupLink(t, "", a, b, model.RoleFollower, false)
+	if err := a.s.UnpairDevice(b.id); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.s.UnpairDevice(a.id); err != nil {
+		t.Fatal(err)
+	}
+	pairTestNodes(t, ns)
+	if err := groupRound(t, id, b, a); err == nil {
+		t.Fatal("re-pairing restored an old folder grant")
+	}
+	writeTestFile(t, b.dir, "note", "kept through unpairing")
+	groupLink(t, id, a, b, model.RoleFollower, true)
+	groupSync(t, id, b, a)
+	assertTestFile(t, a.dir, "note", "base")
+	assertTestFile(t, b.dir, "note", "kept through unpairing")
+	preview := memberRequest(t, b, "GET", "/api/shares/"+id+"/writeback-preview", nil, 2)
+	if preview["modified"] != float64(1) {
+		t.Fatalf("regranted writes lacked preview: %#v", preview)
 	}
 }

@@ -436,6 +436,10 @@ func (s *Service) preparePath(input, exceptID string) (string, error) {
 	if err != nil || !info.IsDir() {
 		return "", errors.New("路径不是可访问的文件夹")
 	}
+	absolute, err = filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", err
+	}
 	for _, existing := range s.store.Config().Shares {
 		if existing.ID == exceptID {
 			continue
@@ -465,16 +469,25 @@ func normalizedInterval(value int) int {
 }
 
 func pathsOverlap(left, right string) bool {
-	left, _ = filepath.Abs(left)
-	right, _ = filepath.Abs(right)
-	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
-		left, right = strings.ToLower(left), strings.ToLower(right)
+	canonical := func(path string) string {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return filepath.Clean(path)
+		}
+		if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+			absolute = resolved
+		}
+		if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+			return strings.ToLower(absolute)
+		}
+		return absolute
 	}
-	if left == right {
-		return true
+	left, right = canonical(left), canonical(right)
+	contains := func(root, candidate string) bool {
+		relative, err := filepath.Rel(root, candidate)
+		return err == nil && filepath.IsLocal(relative)
 	}
-	separator := string(filepath.Separator)
-	return strings.HasPrefix(left, right+separator) || strings.HasPrefix(right, left+separator)
+	return contains(left, right) || contains(right, left)
 }
 
 func encodePairCode(share model.Share) string {

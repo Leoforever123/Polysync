@@ -70,6 +70,7 @@ async function checkGroup() {
     await a.page.locator(".invite-member").click();
     await pair(a,c);
     assert.equal(await a.page.locator("#share-path").count(), 0);
+    assert.match(await a.page.locator("#role-note").innerText(), /本机关机/);
     await a.page.locator("#invite-role").selectOption("follower");
     assert.equal(await a.page.locator("#allow-write-back").isChecked(), false);
     await a.page.locator("#invite-form button[type=submit]").click();

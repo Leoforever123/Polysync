@@ -277,23 +277,25 @@ func (s *Store) RemovePairedDevice(id string) error {
 func (s *Store) SaveShareInvitation(invitation model.ShareInvitation) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	previous := cloneConfig(s.config)
 	for i := range s.config.ShareInvitations {
 		if s.config.ShareInvitations[i].ID == invitation.ID {
 			s.config.ShareInvitations[i] = invitation
-			return s.saveLocked()
+			return s.saveConfigOrRestoreLocked(previous)
 		}
 	}
 	s.config.ShareInvitations = append(s.config.ShareInvitations, invitation)
-	return s.saveLocked()
+	return s.saveConfigOrRestoreLocked(previous)
 }
 
 func (s *Store) RemoveShareInvitation(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	previous := cloneConfig(s.config)
 	for i := range s.config.ShareInvitations {
 		if s.config.ShareInvitations[i].ID == id {
 			s.config.ShareInvitations = append(s.config.ShareInvitations[:i], s.config.ShareInvitations[i+1:]...)
-			return s.saveLocked()
+			return s.saveConfigOrRestoreLocked(previous)
 		}
 	}
 	return nil
@@ -443,6 +445,14 @@ func (s *Store) SaveBaseline(shareID, peerID string, entries []model.Entry) erro
 
 func (s *Store) baselinePath(shareID, peerID string) string {
 	return filepath.Join(s.dir, "state", safeName(shareID), safeName(peerID)+".json")
+}
+
+func (s *Store) saveConfigOrRestoreLocked(previous model.Config) error {
+	if err := s.saveLocked(); err != nil {
+		s.config = previous
+		return err
+	}
+	return nil
 }
 
 func (s *Store) saveLocked() error {

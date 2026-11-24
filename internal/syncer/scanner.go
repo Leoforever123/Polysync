@@ -19,7 +19,7 @@ import (
 const maxFileSize = int64(16 << 30)
 
 func Scan(ctx context.Context, root string) ([]model.Entry, error) {
-	info, err := os.Stat(root)
+	info, err := os.Lstat(root)
 	if err != nil {
 		return nil, fmt.Errorf("open sync folder: %w", err)
 	}

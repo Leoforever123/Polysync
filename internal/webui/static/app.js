@@ -297,6 +297,10 @@ async function beginPair(deviceId, address, trigger) {
 }
 
 function openShareInvite(share, draft, preferred) {
+  const hasCollaborator = share?.members?.some(member => member.role === "collaborator" && member.state === "active") || (share && !share.localRole && share.peerDeviceId);
+  const collaboratorNote = hasCollaborator
+    ? "修改会经本机传递。要在本机关机时继续同步，请在另外两台协作设备间也连接这个文件夹。"
+    : "两台设备都可以编辑，修改会相互同步。";
   const memberIDs = new Set([...(share?.members || []).filter(member => member.state !== "unpaired").map(member => member.deviceId), share?.peerDeviceId]);
   const devices = (state.data?.pairedDevices || []).filter(device => !memberIDs.has(device.id));
   if (!devices.length) {
@@ -309,7 +313,7 @@ function openShareInvite(share, draft, preferred) {
   const options = devices.map(device => `<option value="${escapeHTML(device.id)}" ${device.id === chosen ? "selected" : ""}>${escapeHTML(device.name)} · ${device.online ? "在线" : "离线"}</option>`).join("");
   const local = share ? "" : `${pathField()}<details class="advanced"><summary>名称与同步频率</summary><div class="field"><label for="share-name">显示名称</label><input class="input" id="share-name" maxlength="80" placeholder="默认使用文件夹名称"></div><label class="check-row"><input id="auto-sync" type="checkbox" checked> 在线时自动同步</label><div class="field"><label for="interval">检查间隔</label><select class="select" id="interval"><option value="30">30 秒</option><option value="60">1 分钟</option><option value="300">5 分钟</option></select></div></details>`;
   state.selectedId = share?.id || null;
-  openModal(`<h2 id="modal-title">${share ? "为文件夹添加设备" : "添加同步文件夹"}</h2><p class="modal-intro">${share ? escapeHTML(share.name) + " · " + escapeHTML(share.path) : "对方接受邀请并选好本地文件夹后，就会开始同步。"}</p><form id="invite-form">${local}<div class="field"><label for="target-device">邀请设备</label><select class="select" id="target-device" required>${chosen ? "" : '<option value="">选择一台设备</option>'}${options}</select><button class="text-button" type="button" id="invite-pair">连接其他设备</button></div><div class="field"><label for="invite-role">这台设备如何同步</label><select class="select" id="invite-role"><option value="collaborator">共同编辑</option><option value="follower">跟随此文件夹</option></select><small id="role-note">各台共同编辑设备的修改会相互同步。</small></div><label class="check-row" id="write-back-row" hidden><input type="checkbox" id="allow-write-back"> 允许这台设备回传修改</label><p class="form-error" role="alert"></p><div class="modal-actions"><button class="button ghost" type="button" data-close>取消</button><button class="button primary" type="submit">发送邀请</button></div></form>`, "invite", share ? "#target-device" : "#share-path");
+  openModal(`<h2 id="modal-title">${share ? "为文件夹添加设备" : "添加同步文件夹"}</h2><p class="modal-intro">${share ? escapeHTML(share.name) + " · " + escapeHTML(share.path) : "对方接受邀请并选好本地文件夹后，就会开始同步。"}</p><form id="invite-form">${local}<div class="field"><label for="target-device">邀请设备</label><select class="select" id="target-device" required>${chosen ? "" : '<option value="">选择一台设备</option>'}${options}</select><button class="text-button" type="button" id="invite-pair">连接其他设备</button></div><div class="field"><label for="invite-role">这台设备如何同步</label><select class="select" id="invite-role"><option value="collaborator">共同编辑</option><option value="follower">跟随此文件夹</option></select><small id="role-note" data-collaborator-note="${collaboratorNote}">${collaboratorNote}</small></div><label class="check-row" id="write-back-row" hidden><input type="checkbox" id="allow-write-back"> 允许这台设备回传修改</label><p class="form-error" role="alert"></p><div class="modal-actions"><button class="button ghost" type="button" data-close>取消</button><button class="button primary" type="submit">发送邀请</button></div></form>`, "invite", share ? "#target-device" : "#share-path");
   if (draft) {
     $("#invite-role").value = draft.role;
     $("#invite-role").dispatchEvent(new Event("change", {bubbles:true}));
@@ -588,7 +592,8 @@ document.addEventListener("change", async event => {
   if (event.target.id === "invite-role") {
     const follow = event.target.value === "follower";
     $("#write-back-row").hidden = !follow;
-    $("#role-note").textContent = follow ? "从邀请设备接收更新。本机改动保留副本，默认不回传。" : "各台共同编辑设备的修改会相互同步。";
+    const note = $("#role-note");
+    note.textContent = follow ? "对方从本机接收更新。在对方设备上编辑的文件，默认只留在对方。" : note.dataset.collaboratorNote;
     return;
   }
   const toggle = event.target;

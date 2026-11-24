@@ -2,7 +2,7 @@
 """Real dpkg/pacman lifecycle tests in disposable roots, never the host database.
 
 Run as a regular Linux user with unshare -Ur support. Supply two independently
-built package directories containing application versions 0.4.0 and 0.4.1.
+built package directories and the application versions to install and upgrade.
 """
 import argparse
 import hashlib
@@ -94,15 +94,17 @@ def verify_payload(root):
     unit = root / "verify/polysync.service"
     unit.parent.mkdir(exist_ok=True)
     unit.write_text((root / expected[2]).read_text().replace("/usr/bin/polysync", str(root / "usr/bin/polysync")))
-    run("systemd-analyze", "--user", "verify", unit)
+    runtime = root / "verify/runtime"
+    runtime.mkdir(mode=0o700, exist_ok=True)
+    run("systemd-analyze", "--user", "verify", unit, env=dict(os.environ, XDG_RUNTIME_DIR=str(runtime)))
 
 
-def verify_artifacts(directory):
-    for line in (directory / "SHA256SUMS-linux-0.4.0-1-all.txt").read_text().splitlines():
+def verify_artifacts(directory, version):
+    for line in (directory / f"SHA256SUMS-linux-{version}-1-all.txt").read_text().splitlines():
         expected, name = line.split()
         assert hashlib.sha256((directory / name).read_bytes()).hexdigest() == expected, f"Checksum: {name}"
     for arch, machine in [("amd64", 62), ("arm64", 183)]:
-        package = directory / f"polysync_0.4.0-1_{arch}.deb"
+        package = directory / f"polysync_{version}-1_{arch}.deb"
         assert run("dpkg-deb", "-f", package, "Architecture", capture_output=True, text=True).stdout.strip() == arch
         data = run("dpkg-deb", "--fsys-tarfile", package, capture_output=True).stdout
         with tarfile.open(fileobj=io.BytesIO(data)) as contents:
@@ -112,15 +114,15 @@ def verify_artifacts(directory):
             binary = contents.extractfile("./usr/bin/polysync").read()
             assert int.from_bytes(binary[18:20], "little") == machine
             assert hashlib.sha256(binary).digest() == hashlib.sha256((directory / f"polysync-linux-{arch}").read_bytes()).digest(), "Packaged binary differs from the final build"
-    arch_package = directory / "polysync-0.4.0-1-x86_64.pkg.tar.zst"
+    arch_package = directory / f"polysync-{version}-1-x86_64.pkg.tar.zst"
     binary = run("bsdtar", "-xOf", arch_package, "usr/bin/polysync", capture_output=True).stdout
     assert hashlib.sha256(binary).digest() == hashlib.sha256((directory / "polysync-linux-amd64").read_bytes()).digest()
     with tempfile.TemporaryDirectory(prefix="polysync-arch-recipe-") as temporary:
         recipe = Path(temporary)
-        with tarfile.open(directory / "polysync-0.4.0-1-arch-build.tar.gz") as bundle:
+        with tarfile.open(directory / f"polysync-{version}-1-arch-build.tar.gz") as bundle:
             bundle.extractall(recipe, filter="data")
         run("makepkg", "--verifysource", cwd=recipe)
-        source = recipe / "polysync-0.4.0-linux-amd64.tar.gz"
+        source = recipe / f"polysync-{version}-linux-amd64.tar.gz"
         with source.open("ab") as stream:
             stream.write(b"tampered")
         rejected = subprocess.run(["makepkg", "--verifysource"], cwd=recipe, capture_output=True)
@@ -128,7 +130,7 @@ def verify_artifacts(directory):
     print("PASS artifacts: manifests, both DEB architectures/content/ownership, Arch binary, offline recipe integrity and tamper rejection")
 
 
-def lifecycle(kind, old, new, root):
+def lifecycle(kind, old, old_version, new, new_version, root):
     root.mkdir()
     db = root / ("var/lib/dpkg" if kind == "deb" else "var/lib/pacman")
     db.mkdir(parents=True)
@@ -157,9 +159,9 @@ def lifecycle(kind, old, new, root):
             return run(*base, "-Q", "polysync", capture_output=True, text=True).stdout.split()[1]
     install(old)
     verify_payload(root)
-    assert version().strip() == "0.4.0-1"
+    assert version().strip() == f"{old_version}-1"
     binary = root / "usr/bin/polysync"
-    assert run(binary, "-version", capture_output=True, text=True).stdout.strip() == "PolySync 0.4.0"
+    assert run(binary, "-version", capture_output=True, text=True).stdout.strip() == f"PolySync {old_version}"
     old_hash = hashlib.sha256(binary.read_bytes()).hexdigest()
     data, cache = root / "personal/config/Polysync", root / "personal/cache"
     ui, tcp = port(), port()
@@ -186,9 +188,10 @@ def lifecycle(kind, old, new, root):
         check_released(ui, tcp)
         before = json.loads(config.read_text())
         install(new)
-        assert version().strip() == "0.4.1-1"
+        verify_payload(root)
+        assert version().strip() == f"{new_version}-1"
         assert hashlib.sha256(binary.read_bytes()).hexdigest() != old_hash
-        assert run(binary, "-version", capture_output=True, text=True).stdout.strip() == "PolySync 0.4.1"
+        assert run(binary, "-version", capture_output=True, text=True).stdout.strip() == f"PolySync {new_version}"
         process = start(binary, data, cache, ui, tcp, log)
         stop(process)
         check_released(ui, tcp)
@@ -209,14 +212,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--old-dir", type=Path, required=True)
     parser.add_argument("--new-dir", type=Path, required=True)
+    parser.add_argument("--old-version", default="0.4.0")
+    parser.add_argument("--new-version", default="0.4.1")
     args = parser.parse_args()
-    verify_artifacts(args.old_dir.resolve())
+    verify_artifacts(args.old_dir.resolve(), args.old_version)
     run("unshare", "-Ur", "true")
     with tempfile.TemporaryDirectory(prefix="polysync-package-test-") as temporary:
         for kind, suffix in [("deb", "_{version}-1_amd64.deb"), ("arch", "-{version}-1-x86_64.pkg.tar.zst")]:
-            old = args.old_dir.resolve() / ("polysync" + suffix.format(version="0.4.0"))
-            new = args.new_dir.resolve() / ("polysync" + suffix.format(version="0.4.1"))
-            lifecycle(kind, old, new, Path(temporary) / kind)
+            old = args.old_dir.resolve() / ("polysync" + suffix.format(version=args.old_version))
+            new = args.new_dir.resolve() / ("polysync" + suffix.format(version=args.new_version))
+            lifecycle(kind, old, args.old_version, new, args.new_version, Path(temporary) / kind)
 
 
 if __name__ == "__main__":
