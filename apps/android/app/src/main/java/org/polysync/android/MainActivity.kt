@@ -3,7 +3,6 @@ package org.polysync.android
 import android.app.*
 import android.content.*
 import android.graphics.Color
-import android.graphics.Typeface
 import android.net.Uri
 import android.os.*
 import android.provider.OpenableColumns
@@ -91,14 +90,19 @@ class MainActivity : Activity() {
         val available = resources.configuration.screenWidthDp
         centered.addView(list, android.widget.FrameLayout.LayoutParams(minOf(available, 620).dp(), -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL))
         scroll.addView(centered); outer.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        val nav = row().apply { setPadding(16.dp(), 8.dp(), 16.dp(), 8.dp()); background = design.shape(this@MainActivity, design.surface, 24) }
+        val compactNav = resources.configuration.screenHeightDp < 440 && available > resources.configuration.screenHeightDp
+        val nav = row().apply { val vertical = if (compactNav) 2.dp() else 8.dp(); setPadding(16.dp(), vertical, 16.dp(), vertical); background = design.shape(this@MainActivity, design.surface, 24) }
         for ((key, icon, title) in listOf(Triple("设备", "devices", "设备"), Triple("随传", "send", "随传"), Triple("工作区", "folder", "同步"))) {
             val item = column().apply {
-                gravity = Gravity.CENTER; minimumHeight = 64.dp(); setPadding(8.dp(), 8.dp(), 8.dp(), 8.dp())
+                if (compactNav) orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER; minimumHeight = if (compactNav) 48.dp() else 64.dp(); setPadding(8.dp(), 8.dp(), 8.dp(), 8.dp())
                 isClickable = true; isFocusable = true; contentDescription = title; tag = "nav:$key"
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
                 addView(Mark(this@MainActivity, icon).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }, LinearLayout.LayoutParams(24.dp(),24.dp()))
-                addView(text(title, 12, bold=true).apply { gravity = Gravity.CENTER; setPadding(0,5.dp(),0,0); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO })
+                addView(text(title, 12, bold=true).apply {
+                    gravity = Gravity.CENTER; setPadding(if (compactNav) 6.dp() else 0,if (compactNav) 0 else 5.dp(),0,0)
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                }, LinearLayout.LayoutParams(-2,-2))
                 background = android.graphics.drawable.RippleDrawable(
                     android.content.res.ColorStateList.valueOf((design.green and 0x00ffffff) or 0x22000000),
                     android.graphics.drawable.StateListDrawable().apply {
@@ -298,10 +302,11 @@ class MainActivity : Activity() {
         val shares=snapshot.optJSONArray("shares") ?: JSONArray()
         val requests=snapshot.optJSONArray("pairingRequests") ?: JSONArray()
         val invites=snapshot.optJSONArray("shareInvitations") ?: JSONArray()
+        val conflicts = if (page == "工作区") snapshot.optJSONArray("conflicts")?.objects().orEmpty().count { it.optString("status") == "pending" } else 0
         val shape=buildString {
             append(page); append(running)
             if (page == "设备") { append(requests); append(snapshot.optJSONObject("device")?.optString("name")) }
-            if (page == "工作区") { append(invites); append(snapshot.optJSONArray("conflicts")?.length()) }
+            if (page == "工作区") { append(invites); append(conflicts) }
             val visibleLists=when(page) { "随传" -> listOf(peers); "工作区" -> listOf(peers,shares); else -> listOf(peers,nearby) }
             for(a in visibleLists) for(i in 0 until a.length()) {
                 val o=a.getJSONObject(i); append(o.optString("id"));append(o.optString("name"));append(o.optString("state"));append(o.optBoolean("online")); append(o.optString("localRole")); append(o.optJSONArray("members"))
@@ -398,7 +403,7 @@ class MainActivity : Activity() {
                     if(shares.length() > 0) section("我的工作区")
                     for(i in 0 until shares.length()) {
                         val s=shares.getJSONObject(i);val id=s.getString("id");val c=card();c.addView(text(s.optString("name"),18,bold=true));space(c,8);val label=text("",12,design.muted);labels[id]=label;c.addView(label)
-                        if(running && s.optString("state")=="active") asyncAction(c,"立即同步","正在同步…",true,"sync:$id",{ request("POST","/api/shares/$id/sync"); "已开始同步" })
+                        if(running && s.optString("state")=="active") asyncAction(c,"立即同步","正在开始…",true,"sync:$id",{ request("POST","/api/shares/$id/sync"); "已开始同步" })
                         val members = s.optJSONArray("members")?.objects().orEmpty()
                         if (s.optString("state") in setOf("active", "pending", "disconnected") || (s.optString("state") == "unpaired" && s.optString("localRole") == "collaborator")) {
                             val role = s.optString("localRole").ifBlank { "collaborator" }
@@ -426,7 +431,7 @@ class MainActivity : Activity() {
                         if (running) action(c,"查看与导出",id="files:$id") {work({engine().workspaceFiles(id)}) {showFiles(id,JSONArray(it))}}
                     }
                     if (shares.length() > 0) list.addView(text("工作区保存在应用内。卸载前，请导出需要保留的文件。",12,design.muted))
-                    if((snapshot.optJSONArray("conflicts")?.length() ?: 0)>0) {space(list,12);list.addView(text("有文件存在同步冲突，双方内容已保留。请在电脑端处理。",13,design.green))}
+                    if (conflicts > 0) {space(list,12);list.addView(text("有文件存在同步冲突，双方内容已保留。请在电脑端处理。",13,design.green))}
                 }
             }
             if(focused!=null) list.findViewWithTag<View>(focused)?.requestFocus()
@@ -437,6 +442,7 @@ class MainActivity : Activity() {
             label.visibility = if (detail == "正在发现同一网络的设备") View.GONE else View.VISIBLE
         }
         if (page == "随传") updateTransfers()
+        if (page != "工作区") return
         for (s in shares.objects()) {
             val status = when (s.optString("state")) {
                 "unpaired" -> "已取消配对 · 可查看与导出本地文件"
@@ -444,7 +450,16 @@ class MainActivity : Activity() {
                 "pending" -> "等待对方接受邀请"
                 else -> s.optJSONObject("status")?.optString("message").orEmpty().ifBlank { "准备就绪" }
             }
-            labels[s.optString("id")]?.let { if (it.text != status) it.text = status }
+            val id = s.optString("id")
+            labels[id]?.let { if (it.text != status) it.text = status }
+            list.findViewWithTag<Button>("sync:$id")?.let { button ->
+                if (button.text != "正在开始…") {
+                    val busy = s.optJSONObject("status")?.optString("state") == "syncing"
+                    val title = if (busy) "同步中…" else "立即同步"
+                    if (button.text != title) button.text = title
+                    button.isEnabled = !busy
+                }
+            }
         }
     }
     private fun updateTransfers() {

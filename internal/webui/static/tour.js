@@ -11,7 +11,8 @@ const tourSteps = [
 const tourState = { index: -1, returnFocus: null, key: "polysync-tour-v1" };
 function tourStorage(value) { try { if (value) localStorage.setItem(tourState.key, value); return localStorage.getItem(tourState.key); } catch { return null; } }
 function renderTourInvite() {
-  const show = !$("#sync-workspace").hidden && tourState.index < 0 && !tourStorage();
+  const newWorkspace = state.data && !state.data.shares?.length && !state.data.pairedDevices?.length;
+  const show = newWorkspace && !$("#sync-workspace").hidden && tourState.index < 0 && !tourStorage();
   $("#tour-invite").hidden = !show;
   $("#help-tour").hidden = show;
 }

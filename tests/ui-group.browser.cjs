@@ -58,11 +58,16 @@ async function checkGroup() {
   try {
     browser = await chromium.launch({channel:process.env.POLYSYNC_TEST_BROWSER_CHANNEL || "chrome"});
     const a = await device("A"), b = await device("B"), c = await device("C");
-    for (const peer of [a,b,c]) await fs.mkdir(peer.folder);
+    for (const peer of [a,b,c]) {
+      await fs.mkdir(peer.folder);
+      const status = await (await peer.page.request.get(new URL("/api/status", peer.page.url()).href)).json();
+      assert.deepEqual(status.device.addresses, [peer.address]);
+    }
     await fs.writeFile(path.join(a.folder, "example.txt"), "same folder on all three");
     await a.page.locator("#empty-add").click();
     await pair(a,b);
     assert.equal(await a.page.locator("#invite-role").inputValue(), "collaborator");
+    assert.equal(await a.page.locator("#tour-invite").isVisible(), false);
     assert.equal(await a.page.locator("#write-back-row").isVisible(), false);
     await a.page.locator("#share-path").fill(a.folder);
     await a.page.locator("#invite-form button[type=submit]").click();

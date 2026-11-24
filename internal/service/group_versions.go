@@ -3,9 +3,11 @@ package service
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"path"
 	"slices"
 	"sort"
@@ -33,6 +35,12 @@ func observeGroup(state *model.GroupState, files map[string]model.Entry, device 
 		}
 	}
 	state.Pending = nil
+	for n, e := range files {
+		if old, ok := state.Records[n]; ok && e.Hash == old.Hash && e.Size != old.Size {
+			old.Size = e.Size
+			state.Records[n] = old
+		}
+	}
 	if !writable {
 		return nil
 	}
@@ -50,7 +58,11 @@ func observeGroup(state *model.GroupState, files map[string]model.Entry, device 
 		}
 		clock[device]++
 		e.Path = name
-		state.Records[name] = model.GroupRevision{Entry: e, Clock: clock, ConflictOrigin: old.ConflictOrigin}
+		next := model.GroupRevision{Entry: e, Clock: clock, ConflictOrigin: old.ConflictOrigin}
+		if old.Hash != "" && len(old.Clock) > 0 {
+			next.Parent = &model.GroupAncestor{Hash: old.Hash, Clock: old.Clock}
+		}
+		state.Records[name] = next
 		return nil
 	}
 	for name, e := range files {
@@ -88,19 +100,49 @@ func validateGroupOffer(records model.Revisions, readOnly bool) error {
 		if (rev.ConflictOrigin != "" && len(rev.ConflictOrigin) != sha256.Size*2) || name != rev.Path || rev.Size < 0 || rev.Size > 16<<30 || len(rev.Clock) == 0 || len(rev.Clock) > 1024 {
 			return errors.New("无效的文件版本记录")
 		}
-		for id, n := range rev.Clock {
-			if id == "" || len(id) > 128 || n == 0 {
-				return errors.New("无效的设备版本")
+		if !validClock(rev.Clock) {
+			return errors.New("无效的设备版本")
+		}
+		if p := rev.Parent; p != nil {
+			if !validClock(p.Clock) || !validHex(p.Hash, sha256.Size) || !dominates(rev.Clock, p.Clock) || dominates(p.Clock, rev.Clock) {
+				return errors.New("无效的共同版本记录")
 			}
 		}
-		if rev.Hash != "" {
-			decoded, err := hex.DecodeString(rev.Hash)
-			if err != nil || len(decoded) != sha256.Size || rev.Hash != strings.ToLower(rev.Hash) {
-				return errors.New("无效的内容摘要")
-			}
+		if rev.Hash != "" && !validHex(rev.Hash, sha256.Size) {
+			return errors.New("无效的内容摘要")
 		}
 	}
 	return nil
+}
+
+func validHex(hash string, size int) bool {
+	decoded, err := hex.DecodeString(hash)
+	return err == nil && len(decoded) == size && hash == strings.ToLower(hash)
+}
+
+func validClock(clock map[string]uint64) bool {
+	if len(clock) == 0 || len(clock) > 1024 {
+		return false
+	}
+	for id, n := range clock {
+		if id == "" || len(id) > 128 || n == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// The same logical fork has the same identity whichever neighbor saw it first.
+// Individual branches matter: a later recurrence can have identical file bytes.
+func groupFork(name string, a, b model.GroupRevision) (string, error) {
+	if a.Hash > b.Hash {
+		a, b = b, a
+	}
+	h := sha256.New()
+	if err := json.NewEncoder(h).Encode([]any{name, a.Hash, a.Clock, b.Hash, b.Clock}); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func joinClock(a, b map[string]uint64) map[string]uint64 {
@@ -150,12 +192,18 @@ func mergeGroup(local, remote model.Revisions) (model.Revisions, []model.PlanCon
 		if a.Hash == b.Hash {
 			continue
 		}
-		detail := model.PlanConflict{Path: name, ServerHash: a.Hash, ClientHash: b.Hash, ServerExists: a.Hash != "", ClientExists: b.Hash != "", Kind: "modify-delete"}
+		event, err := groupFork(name, a, b)
+		if err != nil {
+			return nil, nil, err
+		}
+		detail := model.PlanConflict{GroupEvent: event, Path: name, ServerHash: a.Hash, ClientHash: b.Hash, ServerExists: a.Hash != "", ClientExists: b.Hash != "", Kind: "modify-delete"}
+		if a.Parent != nil && b.Parent != nil && a.Parent.Hash == b.Parent.Hash && maps.Equal(a.Parent.Clock, b.Parent.Clock) {
+			detail.BaseHash = a.Parent.Hash
+		}
 		if other.Hash != "" {
 			detail.Kind = "modify-modify"
 			detail.ConflictCopyPath = groupConflictName(name, other.Hash)
-			digest := sha256.Sum256([]byte(name + "\x00" + other.Hash))
-			other.ConflictOrigin = hex.EncodeToString(digest[:])
+			other.ConflictOrigin = event
 			extra[name] = other
 		}
 		conflicts = append(conflicts, detail)
@@ -190,15 +238,9 @@ func mergeGroup(local, remote model.Revisions) (model.Revisions, []model.PlanCon
 
 func revisionPaths(records model.Revisions) []string { return slices.Sorted(maps.Keys(records)) }
 
-// To keep conflict identifiers identical in both directions, the physical
-// pair's original device ID determines which side is passed as "server".
 func (s *Service) saveGroupConflicts(share model.Share, conflicts []model.PlanConflict, self, peer model.PairedDevice) error {
 	for _, c := range conflicts {
-		if self.ID > peer.ID {
-			c.ServerExists, c.ClientExists = c.ClientExists, c.ServerExists
-			c.ServerHash, c.ClientHash = c.ClientHash, c.ServerHash
-		}
-		h := sha256.Sum256([]byte(share.ID + "\x00" + c.Path + "\x00" + c.ServerHash + "\x00" + c.ClientHash))
+		h := sha256.Sum256([]byte(share.ID + "\x00" + c.GroupEvent))
 		id := hex.EncodeToString(h[:16])
 		if _, ok, err := s.store.Conflict(id); err != nil {
 			return err
@@ -206,10 +248,15 @@ func (s *Service) saveGroupConflicts(share model.Share, conflicts []model.PlanCo
 			continue
 		}
 		localHash, remoteHash := c.ServerHash, c.ClientHash
-		if self.ID > peer.ID {
-			localHash, remoteHash = remoteHash, localHash
+		base := c.BaseHash
+		if base != "" {
+			if _, err := os.Stat(s.store.ObjectPath(base)); errors.Is(err, os.ErrNotExist) {
+				base = ""
+			} else if err != nil {
+				return err
+			}
 		}
-		record := model.Conflict{ID: id, ShareID: share.ID, Path: c.Path, Kind: c.Kind, LocalHash: localHash, RemoteHash: remoteHash, LocalExists: localHash != "", RemoteExists: remoteHash != "", LocalDevice: self.Name, RemoteDevice: peer.Name, ConflictCopyPath: c.ConflictCopyPath, Status: "pending", CreatedAt: time.Now()}
+		record := model.Conflict{ID: id, ShareID: share.ID, Path: c.Path, GroupEvent: c.GroupEvent, Kind: c.Kind, BaseHash: base, LocalHash: localHash, RemoteHash: remoteHash, LocalExists: localHash != "", RemoteExists: remoteHash != "", LocalDevice: self.Name, RemoteDevice: peer.Name, ConflictCopyPath: c.ConflictCopyPath, Status: "pending", CreatedAt: time.Now()}
 		if err := s.store.SaveConflict(record); err != nil {
 			return err
 		}

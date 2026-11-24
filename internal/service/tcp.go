@@ -138,9 +138,7 @@ func (s *Service) syncLegacyLocked(ctx context.Context, share model.Share, manua
 		return s.syncFailed(shareID, remoteError(response))
 	}
 	plan := response.Plan
-	if err := s.markConflictsResolved(response.ResolvedConflicts); err != nil {
-		return s.syncFailed(shareID, err)
-	}
+	resolved := response.ResolvedConflicts
 	historyRoot := filepath.Join(s.store.Dir(), "history", share.ID)
 	s.updateStatus(shareID, func(status *model.RuntimeStatus) { status.Message = "正在传输文件…" })
 
@@ -182,9 +180,6 @@ func (s *Service) syncLegacyLocked(ctx context.Context, share model.Share, manua
 	if err := s.savePlanConflicts(share, plan, false, config.DeviceName, pairedDevice.Name); err != nil {
 		return s.syncFailed(shareID, err)
 	}
-	if err := s.autoResolveConflicts(share.ID, finalManifest); err != nil {
-		return s.syncFailed(shareID, err)
-	}
 	if err := framer.WriteJSON(protocol.Ack{Type: "ack", Manifest: finalManifest}); err != nil {
 		return s.syncFailed(shareID, err)
 	}
@@ -196,6 +191,12 @@ func (s *Service) syncLegacyLocked(ctx context.Context, share model.Share, manua
 		return s.syncFailed(shareID, remoteError(response))
 	}
 	if err := s.store.SaveBaseline(share.ID, response.ServerDeviceID, finalManifest); err != nil {
+		return s.syncFailed(shareID, err)
+	}
+	if err := s.autoResolveConflicts(share.ID, finalManifest); err != nil {
+		return s.syncFailed(shareID, err)
+	}
+	if err := s.markConflictsResolved(share.ID, resolved); err != nil {
 		return s.syncFailed(shareID, err)
 	}
 	s.syncSucceeded(shareID, response.ServerDeviceName, len(plan.ClientSends), len(plan.ServerSends), len(plan.Conflicts))
@@ -317,10 +318,6 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 		_ = writeError(framer, "auth", "同步请求无效")
 		return
 	}
-	if err := s.markConflictsResolved(request.ResolvedConflicts); err != nil {
-		_ = writeError(framer, "conflict", err.Error())
-		return
-	}
 	s.learnPeer(share, hello, connection.RemoteAddr())
 	s.updateStatus(share.ID, func(status *model.RuntimeStatus) {
 		status.State = "syncing"
@@ -407,11 +404,6 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 		s.syncFailed(share.ID, err)
 		return
 	}
-	if err := s.autoResolveConflicts(share.ID, finalManifest); err != nil {
-		_ = writeError(framer, "conflict", err.Error())
-		s.syncFailed(share.ID, err)
-		return
-	}
 	if !manifestsEqual(finalManifest, ack.Manifest) {
 		err := errors.New("同步期间文件发生变化，将在下一轮重试")
 		_ = writeError(framer, "changed", err.Error())
@@ -421,6 +413,15 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 	if err := s.store.SaveBaseline(share.ID, hello.DeviceID, finalManifest); err != nil {
 		_ = writeError(framer, "state", err.Error())
 		s.syncFailed(share.ID, err)
+		return
+	}
+	if err := s.autoResolveConflicts(share.ID, finalManifest); err != nil {
+		_ = writeError(framer, "conflict", err.Error())
+		s.syncFailed(share.ID, err)
+		return
+	}
+	if err := s.markConflictsResolved(share.ID, request.ResolvedConflicts); err != nil {
+		_ = writeError(framer, "conflict", err.Error())
 		return
 	}
 	result := protocol.Result{

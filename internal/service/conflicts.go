@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -92,13 +93,20 @@ func (s *Service) resolvedConflictIDs(shareID string) []string {
 	return result
 }
 
-func (s *Service) markConflictsResolved(ids []string) error {
-	for _, id := range ids {
-		conflict, exists, err := s.store.Conflict(id)
-		if err != nil {
-			return err
+func (s *Service) markConflictsResolved(shareID string, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	known := sortedIDs(slices.Clone(ids))
+	records, err := s.store.ShareConflicts(shareID)
+	if err != nil {
+		return err
+	}
+	for _, conflict := range records {
+		if conflict.ShareID != shareID || conflict.Status != "pending" {
+			continue
 		}
-		if !exists || conflict.Status == "resolved" {
+		if _, ok := slices.BinarySearch(known, conflict.ID); !ok {
 			continue
 		}
 		conflict.Status = "resolved"
@@ -172,13 +180,49 @@ func (s *Service) ResolveConflict(ctx context.Context, id, choice, merged string
 	if !exists || conflict.Status != "pending" {
 		return errors.New("冲突已经解决或不存在")
 	}
+	if share.LocalRole != "" {
+		share, exists = s.store.Share(share.ID)
+		if !exists || share.State != "active" || (share.LocalRole == model.RoleFollower && (len(share.Members) != 1 || !share.Members[0].AllowWriteBack)) {
+			return errors.New("当前文件夹没有回传权限")
+		}
+		state, err := s.store.GroupState(share.ReplicaID)
+		if err != nil {
+			return err
+		}
+		if slices.Contains(state.Resolved, id) {
+			return errors.New("冲突已经解决")
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	historyRoot := filepath.Join(s.store.Dir(), "history", share.ID)
+	// A stale group dialog must not overwrite an edit saved after the fork,
+	// including during a session that applied files but lost its final ack.
+	remove := func(path, expected string) error {
+		if conflict.GroupEvent == "" {
+			return syncer.DeleteFile(share.Path, path, historyRoot)
+		}
+		target, err := syncer.SecureJoin(share.Path, path)
+		if err != nil {
+			return err
+		}
+		if _, err = os.Lstat(target); errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return syncer.DeletePlannedFile(ctx, share.Path, path, historyRoot, expected)
+	}
+	winner := max(conflict.LocalHash, conflict.RemoteHash)
+	write := func(input io.Reader, size int64, hash string) error {
+		if conflict.GroupEvent == "" {
+			return syncer.WriteResolvedStream(ctx, share.Path, conflict.Path, historyRoot, input, size, hash, 0644)
+		}
+		entry := model.Entry{Path: conflict.Path, Size: size, Hash: hash, Mode: 0644, ModTime: time.Now().UnixNano()}
+		return syncer.InstallPlannedContent(ctx, share.Path, historyRoot, entry, winner, func(dst io.Writer, n int64) error { _, e := io.CopyN(dst, input, n); return e })
+	}
 	switch choice {
 	case "delete":
-		if err := syncer.DeleteFile(share.Path, conflict.Path, historyRoot); err != nil {
+		if err := remove(conflict.Path, winner); err != nil {
 			return err
 		}
 	case "local", "remote":
@@ -188,7 +232,7 @@ func (s *Service) ResolveConflict(ctx context.Context, id, choice, merged string
 			hash, exists = conflict.RemoteHash, conflict.RemoteExists
 		}
 		if !exists {
-			if err := syncer.DeleteFile(share.Path, conflict.Path, historyRoot); err != nil {
+			if err := remove(conflict.Path, winner); err != nil {
 				return err
 			}
 			break
@@ -205,21 +249,22 @@ func (s *Service) ResolveConflict(ctx context.Context, id, choice, merged string
 		if !info.Mode().IsRegular() {
 			return errors.New("冲突版本不是普通文件")
 		}
-		if err := syncer.WriteResolvedStream(ctx, share.Path, conflict.Path, historyRoot, input, info.Size(), hash, 0o644); err != nil {
+		if err := write(input, info.Size(), hash); err != nil {
 			return err
 		}
 	case "merged":
 		if len(merged) > maxMergeTextSize || !utf8.ValidString(merged) || strings.ContainsRune(merged, '\x00') {
 			return errors.New("合并结果不是受支持的文本文件")
 		}
-		if err := syncer.WriteResolvedFile(share.Path, conflict.Path, historyRoot, []byte(merged), 0o644); err != nil {
+		digest := sha256.Sum256([]byte(merged))
+		if err := write(strings.NewReader(merged), int64(len(merged)), hex.EncodeToString(digest[:])); err != nil {
 			return err
 		}
 	default:
 		return errors.New("未知的冲突解决方式")
 	}
 	if conflict.ConflictCopyPath != "" {
-		if err := syncer.DeleteFile(share.Path, conflict.ConflictCopyPath, historyRoot); err != nil {
+		if err := remove(conflict.ConflictCopyPath, min(conflict.LocalHash, conflict.RemoteHash)); err != nil {
 			return err
 		}
 	}

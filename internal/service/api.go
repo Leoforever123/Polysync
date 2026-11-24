@@ -112,7 +112,7 @@ func (s *Service) handleStatus(writer http.ResponseWriter, _ *http.Request) {
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"device": map[string]any{
 			"id": config.DeviceID, "name": config.DeviceName, "listenPort": s.listenPort,
-			"addresses": localAddresses(s.listenPort), "platform": runtime.GOOS,
+			"addresses": s.localAddresses(), "platform": runtime.GOOS,
 		},
 		"shares": shares, "activities": s.Activities(), "protocolVersion": model.ProtocolVersion, "trayEnabled": trayEnabled,
 		"nearbyDevices": nearby, "pairedDevices": pairedDevices, "pairingRequests": s.PairingRequests(),
@@ -523,7 +523,13 @@ func validatePeerAddress(address string) error {
 	return nil
 }
 
-func localAddresses(port int) []string {
+func (s *Service) localAddresses() []string {
+	if s.listener != nil {
+		if addr, ok := s.listener.Addr().(*net.TCPAddr); ok && !addr.IP.IsUnspecified() {
+			return []string{addr.String()}
+		}
+	}
+	port := s.listenPort
 	addresses := []string{net.JoinHostPort("127.0.0.1", strconv.Itoa(port))}
 	interfaces, _ := net.Interfaces()
 	for _, iface := range interfaces {

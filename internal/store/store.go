@@ -314,7 +314,14 @@ func (s *Store) SaveConflict(conflict model.Conflict) error {
 }
 
 func (s *Store) Conflicts() ([]model.Conflict, error) {
-	root := filepath.Join(s.dir, "conflicts")
+	return listConflicts(filepath.Join(s.dir, "conflicts"))
+}
+
+func (s *Store) ShareConflicts(shareID string) ([]model.Conflict, error) {
+	return listConflicts(filepath.Join(s.dir, "conflicts", safeName(shareID)))
+}
+
+func listConflicts(root string) ([]model.Conflict, error) {
 	var result []model.Conflict
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if errors.Is(walkErr, os.ErrNotExist) {

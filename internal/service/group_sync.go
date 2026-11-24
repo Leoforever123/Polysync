@@ -17,10 +17,11 @@ import (
 )
 
 type groupFrame struct {
-	Type    string          `json:"type"`
-	Message string          `json:"message,omitempty"`
-	Records model.Revisions `json:"records,omitempty"`
-	Need    []string        `json:"need,omitempty"`
+	Resolved []string        `json:"resolved,omitempty"`
+	Type     string          `json:"type"`
+	Message  string          `json:"message,omitempty"`
+	Records  model.Revisions `json:"records,omitempty"`
+	Need     []string        `json:"need,omitempty"`
 }
 
 func readGroup(f *protocol.Framer, stage string) (groupFrame, error) {
@@ -256,10 +257,18 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 		}
 	}
 	offer := state.Records
+	var resolutions []string
 	if localRO {
 		offer = nil
+	} else {
+		resolutions, err = s.groupResolvedIDs(sh, state)
+		if err != nil {
+			return err
+		}
 	}
-	send := func() error { return f.WriteJSON(groupFrame{Type: "group_offer", Records: offer}) }
+	send := func() error {
+		return f.WriteJSON(groupFrame{Type: "group_offer", Records: offer, Resolved: resolutions})
+	}
 	if client {
 		if err = send(); err != nil {
 			return err
@@ -267,6 +276,9 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 	}
 	frame, err := readGroup(f, "group_offer")
 	if err != nil {
+		return err
+	}
+	if err = validateGroupDecisions(frame.Resolved, peerRO); err != nil {
 		return err
 	}
 	if err = validateGroupOffer(frame.Records, peerRO); err != nil {
@@ -350,6 +362,12 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 		if err != nil {
 			return err
 		}
+		info, err := file.Stat()
+		if err != nil {
+			file.Close()
+			return err
+		}
+		e.Size = info.Size()
 		err = syncer.InstallPlannedContent(ctx, sh.Path, history, e, files[name].Hash, func(dst io.Writer, n int64) error { _, err := io.CopyN(dst, file, n); return err })
 		file.Close()
 		if err != nil {
@@ -368,15 +386,21 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 			return fmt.Errorf("同步期间文件有变化：%s", e.Path)
 		}
 	}
-	if err = s.saveGroupConflicts(sh, conflicts, model.PairedDevice{ID: self.DeviceID, Name: self.DeviceName}, peer); err != nil {
-		return err
+	for _, entry := range final {
+		if rev, ok := desired[entry.Path]; ok && rev.Hash == entry.Hash && rev.Size != entry.Size {
+			rev.Size = entry.Size
+			desired[entry.Path] = rev
+		}
 	}
-	if err = s.autoResolveConflicts(sh.ID, final); err != nil {
+	if err = s.saveGroupConflicts(sh, conflicts, model.PairedDevice{ID: self.DeviceID, Name: self.DeviceName}, peer); err != nil {
 		return err
 	}
 	state.Records = desired
 	state.Pending = nil
 	if err = s.store.SaveGroupState(sh.ReplicaID, state); err != nil {
+		return err
+	}
+	if err = s.store.SaveBaseline(sh.ID, peer.ID, final); err != nil {
 		return err
 	}
 	if client {
@@ -391,11 +415,30 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 			return err
 		}
 	}
-	if err = s.store.SaveBaseline(sh.ID, peer.ID, final); err != nil {
+	if !client {
+		if err = f.WriteJSON(groupFrame{Type: "group_done"}); err != nil {
+			return err
+		}
+	}
+	if !localRO {
+		if err = s.autoResolveConflicts(sh.ID, final); err != nil {
+			return err
+		}
+	}
+	if err = s.commitGroupDecisions(sh, state, frame.Resolved); err != nil {
 		return err
 	}
-	if !client {
-		return f.WriteJSON(groupFrame{Type: "group_done"})
+	// The peer must finish its durable status update before the caller reports
+	// success, even when no file content was transferred for a keep decision.
+	if client {
+		if err = f.WriteJSON(groupFrame{Type: "group_committed"}); err != nil {
+			return err
+		}
+		_, err = readGroup(f, "group_committed")
+		return err
 	}
-	return nil
+	if _, err = readGroup(f, "group_committed"); err != nil {
+		return err
+	}
+	return f.WriteJSON(groupFrame{Type: "group_committed"})
 }

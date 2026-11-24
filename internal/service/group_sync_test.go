@@ -152,6 +152,10 @@ func groupSync(t *testing.T, id string, from, to *groupTestNode) {
 	if err := groupRound(t, id, from, to); err != nil {
 		t.Fatalf("sync %s -> %s: %v", from.s.store.Config().DeviceName, to.s.store.Config().DeviceName, err)
 	}
+	// The final response has crossed the socket; let the receiving handler
+	// release its folder lock before issuing independent local control calls.
+	verifyGroupApplied(t, to, id)
+
 }
 
 func TestGroupMeshSyncsOfflineAndMergesConcurrentEdits(t *testing.T) {

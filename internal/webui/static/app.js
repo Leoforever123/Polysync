@@ -63,6 +63,7 @@ async function refresh(silent = false) {
 }
 
 function render() {
+  if (typeof renderTourInvite === "function") renderTourInvite();
   const { device, shares, activities } = state.data;
   $("#add-share").hidden = !shares.length || $("#sync-workspace").hidden;
   const note = $("#background-note span");
@@ -106,7 +107,7 @@ function renderDevices() {
   if (state.modal === "nearby") {
     $("#modal-title").textContent = title;
     if (!focusedPeer || !$("#dialog-device-list").contains(focused)) {
-      setContent("#dialog-device-list", cards || `<div class="no-activity">暂未发现设备。请确认另一台设备已启动，并允许 mDNS 和 TCP 通过防火墙。</div>`);
+      setContent("#dialog-device-list", cards || `<div class="no-activity">在另一台设备上打开 PolySync，并连接同一局域网。</div>`);
     }
   }
 }
@@ -654,7 +655,7 @@ document.addEventListener("submit", async event => {
       finish(); toast("同步邀请已发送"); await refresh();
     } else if (event.target.id === "accept-form") {
       await api(`/api/share-invitations/${state.selectedId}/accept`, { method: "POST", body: JSON.stringify({ path: $("#share-path")?.value || "", autoSync: $("#auto-sync").checked, intervalSeconds: 30 }) });
-      finish(); toast("邀请已接受，正在首次同步"); await refresh();
+      finish(); toast("已接受邀请并连接文件夹"); await refresh();
     } else if (event.target.id === "edit-form") {
       const share = state.data.shares.find(item => item.id === state.selectedId);
       await api(`/api/shares/${share.id}`, { method: "PUT", body: JSON.stringify({ name: $("#share-name").value, path: $("#share-path").value, peerAddress: $("#peer-address").value, autoSync: $("#auto-sync").checked, intervalSeconds: Number($("#interval").value) }) });

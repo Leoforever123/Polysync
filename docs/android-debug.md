@@ -86,6 +86,14 @@ Windows 的 `desktopRoot` 参数应使用正斜杠（例如 `E:/path/to/test/wor
 
 界面手动检查：设备 / 随传 / 工作区空状态、添加设备输入与取消、验证码对话框、系统文件选择 / 保存、旋转与较大字体、键盘焦点、通知停止后重启。记录真机通过项与未验证项，不能用 APK 构建成功代替真机通过。
 
+## dev.5 的原生交互与互通验证
+
+2026-11-24 在独立的 Android 15 模拟器与临时 Linux 桌面服务上实际配对并传输了文件。手机输入桌面显示的验证码，单一接收方直接打开系统文件选择器；从手机发出的只接收邀请在桌面记录为 `follower` 且禁止回传。打开“成员与权限”选择停止同步后，取消确认会保留该关系。浅色、深色、系统动画比例为零、窄窗口及横屏均通过实际点按和滚动检查。
+
+八个 Android instrumentation 用例覆盖双端真实 TLS、2 MiB 文件内容、只接收工作区、导出、后台启停、角色与权限、千条历史的增量更新及系统绘制。主机 GPU 加速的 Android 15 x86_64 模拟器使用 60 Hz、1080 × 2400。加载 1,000 条记录、实际显示前 20 条并连续来回滚动，单独运行测量用例采集了 78 帧。第 95 百分位的帧间隔为 16.67 ms，渲染耗时为 16.95 ms，未出现大于 25 ms 的帧间隔。本轮没有接入实体手机。
+
+另外使用支持 ARM 翻译的 Google APIs Android 15 镜像并装了发布的 dev.4 APK 与 dev.5 ARM APK，包管理器保留了两个独立的应用 ID。该镜像的 ARM 转译器执行 Go 运行时读取 CPU 型号的 `MIDR_EL1` 指令时，对两个版本均返回 `SIGILL`。同机也尝试用官方 arm64-v8a AOSP 镜像及软件模拟启动，当前 Android Emulator 拒绝在 x86_64 主机上运行此架构。上述功能与帧间隔数据来自原生 x86_64 Android 构建，ARM APK 完成了构建、安装、签名及 16 KiB 对齐检查。实体 arm64 手机的运行体验待验证。
+
 ## 2026-09-21 验证记录
 
 - 设备：vivo V2417A，Android 16，arm64-v8a；APK 已通过 USB 安装，未上架。
@@ -123,3 +131,15 @@ Windows 的 `desktopRoot` 参数应使用正斜杠（例如 `E:/path/to/test/wor
 构建包含两项新的 BackgroundPolicy 单元测试，AppLifecycleTest 增加主动停止后重建与明确重启用例，`install-android.ps1 -Test` 现在要求 5 项真机用例通过。完整修复和验证边界见 [基础风险修复记录](basic-risk-fixes-2026-09-24.md)。
 
 最终 dev.3 已覆盖安装。2026-09-24 的 CoreDeviceTest、AppLifecycleTest、DesignDeviceTest 合计 `OK (5 tests)`，147.487 秒，包含新加的主动停止后 Activity 重建保持停止及明确重启。Kotlin 单元测试 4 项、lint、共享核心五目标构建和 Go 竞态检测通过。最终 APK 11,751,712 字节，SHA-256：`230097af64f579555062ff713f1422442c9d2260acaebb92c78f791c6364409d`。mDNS 双向真网络和 Windows/Android 双向互通没有在此轮重新执行，仍以此前记录为历史依据。
+
+## 随桌面版本发布实验包
+
+用本机预览签名构建、验证 APK 后，将发行文件放入仓库的 Git LFS 存储，源码中只保存指针。下面以桌面 v0.5.0 为例。保持签名密钥在原构建环境中。
+
+```sh
+mkdir -p packaging/android
+git lfs clean < dist/polysync-android-arm64-preview.apk > packaging/android/preview-v0.5.0.lfs
+git lfs push --object-id origin "$(sed -n 's/^oid sha256://p' packaging/android/preview-v0.5.0.lfs)"
+```
+
+正式标签的构建会通过指针取回同一份 APK，检查 Android 签名与 SHA-256 后把它放进 Release。普通源码检出不需要下载这个安装包。

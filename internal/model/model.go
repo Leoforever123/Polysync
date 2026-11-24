@@ -111,6 +111,7 @@ type ShareInvitation struct {
 }
 
 type Conflict struct {
+	GroupEvent       string    `json:"groupEvent,omitempty"`
 	ID               string    `json:"id"`
 	ShareID          string    `json:"shareId"`
 	Path             string    `json:"path"`
@@ -129,6 +130,7 @@ type Conflict struct {
 }
 
 type PlanConflict struct {
+	GroupEvent       string `json:"-"`
 	Path             string `json:"path"`
 	Kind             string `json:"kind"`
 	BaseHash         string `json:"baseHash,omitempty"`
@@ -198,7 +200,13 @@ type PairCode struct {
 }
 
 // A revision with an empty hash is a retained deletion.
+type GroupAncestor struct {
+	Hash  string            `json:"hash"`
+	Clock map[string]uint64 `json:"clock"`
+}
+
 type GroupRevision struct {
+	Parent *GroupAncestor `json:"parent,omitempty"`
 	Entry
 	ConflictOrigin string            `json:"conflictOrigin,omitempty"`
 	Clock          map[string]uint64 `json:"clock"`
@@ -207,6 +215,7 @@ type GroupRevision struct {
 type Revisions map[string]GroupRevision
 
 type GroupState struct {
-	Records Revisions `json:"records"`
-	Pending Revisions `json:"pending,omitempty"`
+	Resolved []string  `json:"resolved,omitempty"`
+	Records  Revisions `json:"records"`
+	Pending  Revisions `json:"pending,omitempty"`
 }
