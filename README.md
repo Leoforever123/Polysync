@@ -93,7 +93,7 @@ Linux 或 macOS：
 
 从 Windows 复制 Linux/macOS 原始二进制后，需要先恢复执行权限：`chmod +x polysync-*`。
 
-在 Linux/WSL 中对上述二进制打包：`python3 scripts/package-linux.py --version 0.5.0 --format all`。需要 Python 3.11+、dpkg-deb 和 makepkg；也可单独指定 `--format deb` 或 `--format arch`。脚本校验 ELF 架构、静态链接以及构建生成的 `.build-info` 版本/哈希，输出安装包、离线 Arch 构建材料和独立的 `SHA256SUMS-linux-0.4.0-1-all.txt`。详见 [本轮打包验证](docs/packaging-verification-2026-10-25.md)。
+在 Linux/WSL 中对上述二进制打包：`python3 scripts/package-linux.py --version 0.5.0 --format all`。需要 Python 3.11+、dpkg-deb 和 makepkg；也可单独指定 `--format deb` 或 `--format arch`。脚本校验 ELF 架构、静态链接以及构建生成的 `.build-info` 版本/哈希，输出安装包、离线 Arch 构建材料和独立的 `SHA256SUMS-linux-0.5.0-1-all.txt`。安装升级与交互验收见 [v0.5 验证记录](docs/experience-verification.md)。
 
 ## 随传与新手引导
 
