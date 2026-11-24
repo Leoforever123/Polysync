@@ -37,7 +37,7 @@ func TestSaveAtVacatedNameCanRescan(t *testing.T) {
 					}
 				}
 			}}
-			if err := applyArchivedFile(ctx, target, "notes", original, staged, true); !saved || err == nil {
+			if err := applyArchivedFile(ctx, root, target, "notes", original, staged, t.TempDir()); !saved || err == nil {
 				t.Fatalf("expected the concurrent save to abort the plan: %v", err)
 			}
 			entries, err := Scan(t.Context(), root)
@@ -75,7 +75,7 @@ func TestFileSavedAfterArchiveIsRestored(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := applyArchivedFile(t.Context(), target, "notes", scanned, staged, true); err == nil {
+			if err := applyArchivedFile(t.Context(), root, target, "notes", scanned, staged, t.TempDir()); err == nil {
 				t.Fatal("committed a stale plan after archiving")
 			}
 			data, err := os.ReadFile(target)

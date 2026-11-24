@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 )
 
 const commitDirPrefix = ".polysync-commit-"
@@ -47,10 +49,10 @@ func applyPlannedFile(ctx context.Context, root, relative, historyRoot, scannedH
 	if err := archiveExisting(ctx, target, relative, historyRoot, scannedHash); err != nil {
 		return err
 	}
-	return applyArchivedFile(ctx, target, relative, scannedHash, staged, historyRoot != "")
+	return applyArchivedFile(ctx, root, target, relative, scannedHash, staged, historyRoot)
 }
 
-func applyArchivedFile(ctx context.Context, target, relative, scannedHash, staged string, archived bool) error {
+func applyArchivedFile(ctx context.Context, root, target, relative, scannedHash, staged, historyRoot string) error {
 	dir, err := os.MkdirTemp(filepath.Dir(target), commitDirPrefix+"*")
 	if err != nil {
 		return err
@@ -86,15 +88,15 @@ func applyArchivedFile(ctx context.Context, target, relative, scannedHash, stage
 			err = nil
 		}
 	}
-	if errors.Is(err, os.ErrExist) && archived {
+	if errors.Is(err, os.ErrExist) && historyRoot != "" {
 		// Another save owns the live name. The verified old revision is already
 		// in history; let the next scan reconcile the newly saved version.
-		return errors.Join(changedTarget(relative), discardVerifiedClaim(claimed, info))
+		return errors.Join(changedTarget(relative), retainClaim(claimed, root, relative, historyRoot, info))
 	}
 	if err != nil {
 		return restoreClaim(claimed, target, err)
 	}
-	return discardVerifiedClaim(claimed, info)
+	return retainClaim(claimed, root, relative, historyRoot, info)
 }
 
 func verifyClaim(ctx context.Context, claimed, relative, scannedHash string) (os.FileInfo, error) {
@@ -129,11 +131,58 @@ func checkClaimInfo(claimed string, before os.FileInfo, displayPath string) erro
 	return nil
 }
 
-func discardVerifiedClaim(claimed string, info os.FileInfo) error {
+// Keep the original inode reachable. An editor may flush an already-open handle
+// even after we verified, replaced and archived the old contents.
+func retainClaim(claimed, root, relative, historyRoot string, info os.FileInfo) error {
 	if err := checkClaimInfo(claimed, info, claimed); err != nil {
-		return err // Keep late edits through an open handle in the recovery directory.
+		return err // An edit is already observable. Leave the interrupted claim for recovery.
 	}
-	return os.Remove(claimed)
+	if historyRoot != "" {
+		if err := moveRetainedFile(claimed, filepath.Join(historyRoot, "open-files"), relative, false); err == nil {
+			return nil
+		}
+	}
+	// A rename cannot move an inode to another volume. Prefer the top of
+	// the sync root, then the top of a nested mount containing this file.
+	dir := root
+	parts := strings.Split(relative, "/")
+	for _, part := range parts {
+		if err := moveRetainedFile(claimed, dir, relative, true); err == nil {
+			return nil
+		}
+		dir = filepath.Join(dir, part)
+	}
+	return fmt.Errorf("请保留并检查原文件：%s", claimed)
+}
+
+const localHistoryPrefix = ".polysync-local-history-"
+const retainedFileName = ".polysync-backup-open-file"
+
+func moveRetainedFile(claimed, parent, relative string, local bool) error {
+	if err := os.MkdirAll(parent, 0700); err != nil {
+		return err
+	}
+	prefix := time.Now().UTC().Format("20060102T150405Z") + "-"
+	if local {
+		prefix = localHistoryPrefix + prefix
+	}
+	dir, err := os.MkdirTemp(parent, prefix)
+	if err != nil {
+		return err
+	}
+	dest := filepath.Join(dir, filepath.FromSlash(relative))
+	if local {
+		// Older clients also exclude this filename from their manifests.
+		dest = filepath.Join(dest, retainedFileName)
+	}
+	if err = os.MkdirAll(filepath.Dir(dest), 0700); err == nil {
+		err = renameNoReplace(claimed, dest)
+	}
+	if err != nil {
+		// Only remove empty private directories. Never delete a published inode.
+		removeEmptyParents(parent, filepath.Dir(dest))
+	}
+	return err
 }
 
 func publishPlannedFile(staged, target, relative string) error {

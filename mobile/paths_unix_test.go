@@ -5,8 +5,9 @@ package mobile
 import (
 	"os"
 	"path/filepath"
-	"polysync/internal/model"
 	"testing"
+
+	"polysync/internal/model"
 )
 
 func TestWorkspaceExportThroughApplicationDirectoryAlias(t *testing.T) {
@@ -42,6 +43,24 @@ func TestWorkspaceExportThroughApplicationDirectoryAlias(t *testing.T) {
 	if err != nil || string(content) != "phone document" {
 		t.Fatalf("wrong exported content: %v", err)
 	}
+	// New desktop and group records store the resolved path, older records
+	// preserve Android's alias. Both must retain the same private workspace.
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = e.svc.Store().UpdateShare(model.Share{ID: "test", Path: resolved}); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(alias, "imports", "input"), []byte("new"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.ImportToWorkspace("test", "input", "import.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.WorkspaceExportPath("test", "import.txt"); err != nil {
+		t.Fatal(err)
+	}
 	outside := filepath.Join(dir, "outside.txt")
 	if err := os.WriteFile(outside, []byte("outside"), 0600); err != nil {
 		t.Fatal(err)
@@ -51,5 +70,15 @@ func TestWorkspaceExportThroughApplicationDirectoryAlias(t *testing.T) {
 	}
 	if _, err := e.WorkspaceExportPath("test", "escape.txt"); err == nil {
 		t.Fatal("export followed an escaping symlink")
+	}
+	linked := filepath.Join(alias, "workspaces", "linked")
+	if err = os.Symlink(filepath.Dir(outside), linked); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.svc.Store().AddShare(model.Share{ID: "linked", Path: linked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.WorkspaceFiles("linked"); err == nil {
+		t.Fatal("workspace root followed a symlink")
 	}
 }

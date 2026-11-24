@@ -49,6 +49,10 @@ func (e *Engine) Start(directory, name, listen string) error {
 			return err
 		}
 	}
+	directory, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return err
+	}
 	st, err := store.Open(filepath.Join(directory, "state"), listen, "127.0.0.1:0")
 	if err != nil {
 		return err
@@ -330,11 +334,25 @@ func (e *Engine) workspace(id string) (string, error) {
 	if !ok {
 		return "", errors.New("工作区不存在")
 	}
-	rel, err := filepath.Rel(filepath.Join(e.dir, "workspaces"), share.Path)
-	if err != nil || !safeName(rel) {
+	// Android may return different absolute names for the same private data directory.
+	// Compare the real parent on both sides, while refusing changes to the workspace root itself.
+	parent, err := filepath.EvalSymlinks(filepath.Dir(share.Path))
+	if err != nil {
+		return "", err
+	}
+	name := filepath.Base(share.Path)
+	if parent != filepath.Join(e.dir, "workspaces") || !safeName(name) {
 		return "", errors.New("工作区不属于此应用")
 	}
-	return share.Path, nil
+	path := filepath.Join(parent, name)
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", errors.New("工作区目录无效")
+	}
+	return path, nil
 }
 
 func (e *Engine) WorkspaceFiles(id string) (string, error) {

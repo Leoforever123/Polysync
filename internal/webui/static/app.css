@@ -130,9 +130,8 @@ h2 { margin: 0; font-size: 25px; letter-spacing: -.035em; }
 .status span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #929b97; }
 .status.synced .status-dot { background: #3c9b6f; }
-.status.syncing .status-dot { background: var(--amber); animation: pulse 1.1s infinite; }
+.status.syncing .status-dot { background: var(--amber); }
 .status.error .status-dot { background: var(--red); }
-@keyframes pulse { 50% { opacity: .35; } }
 .auto-control { display: flex; align-items: center; gap: 8px; color: var(--soft-ink); font-size: 12px; white-space: nowrap; }
 .switch { width: 35px; height: 20px; position: relative; display: inline-block; }
 .switch input { opacity: 0; width: 0; height: 0; }
@@ -198,10 +197,9 @@ footer { min-height: 80px; border-top: 1px solid var(--line); display: flex; jus
 .toast { position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 6px); background: var(--ink); color: var(--paper); border-radius: 9px; padding: 11px 15px; font-size: 13px; opacity: 0; pointer-events: none; transition: .22s; z-index: 40; box-shadow: var(--shadow); }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast.error { background: #8c342f; color: white; }
-.skeleton { height: 13px; width: 55%; background: rgba(140,150,145,.15); border-radius: 8px; margin: 10px 0; animation: shimmer 1.2s infinite alternate; }
+.skeleton { height: 13px; width: 55%; background: rgba(140,150,145,.15); border-radius: 8px; margin: 10px 0; }
 .device-card .skeleton { background: rgba(255,255,255,.12); }
 .skeleton.wide { width: 82%; height: 20px; }
-@keyframes shimmer { to { opacity: .45; } }
 
 @media (max-width: 800px) {
   .shell { width: min(100% - 28px, 680px); }
@@ -374,7 +372,6 @@ button:disabled { transform: none; }
 .device-grid .empty > div { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 22px; }
 .device-grid .empty-symbol { grid-row: span 2; margin: 0; }
 .device-grid .empty p, .device-grid .empty h3 { margin: 0; }
-.status.syncing .status-dot { animation: none; }
 
 .review-writeback { margin-top: 12px; }
 .review-files { list-style: none; padding: 0; overflow: auto; max-height: 32vh; }

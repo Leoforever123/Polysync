@@ -68,9 +68,6 @@ func Scan(ctx context.Context, root string) ([]model.Entry, error) {
 		if !info.Mode().IsRegular() {
 			return nil
 		}
-		if info.Size() > maxFileSize {
-			return fmt.Errorf("file exceeds 16 GiB limit: %s", path)
-		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
@@ -79,13 +76,11 @@ func Scan(ctx context.Context, root string) ([]model.Entry, error) {
 		if err := ValidateRelativePath(rel); err != nil {
 			return err
 		}
-		hash, err := hashFile(ctx, path)
+		entry, err := scanRegularFile(ctx, path, rel, info)
 		if err != nil {
 			return err
 		}
-		entries = append(entries, model.Entry{
-			Path: rel, Hash: hash, Size: info.Size(), ModTime: info.ModTime().UnixNano(), Mode: uint32(info.Mode().Perm()),
-		})
+		entries = append(entries, entry)
 		return nil
 	})
 	if err != nil {
@@ -99,32 +94,56 @@ func isInternalTemporary(name string) bool {
 	return strings.HasPrefix(name, ".polysync-part-") || strings.HasPrefix(name, ".polysync-backup-")
 }
 
+// Read metadata and contents from the same opened file. Re-check the live
+// name before advertising the result: an editor can replace it during a scan.
+func scanRegularFile(ctx context.Context, path, relative string, observed fs.FileInfo) (model.Entry, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return model.Entry{}, err
+	}
+	defer file.Close()
+	before, err := file.Stat()
+	if err != nil {
+		return model.Entry{}, err
+	}
+	if !before.Mode().IsRegular() || observed.Size() != before.Size() || !os.SameFile(observed, before) {
+		return model.Entry{}, changedTarget(relative)
+	}
+	if before.Size() > maxFileSize {
+		return model.Entry{}, fmt.Errorf("file exceeds 16 GiB limit: %s", path)
+	}
+	digest, size, err := hashReader(ctx, io.LimitReader(file, before.Size()+1))
+	if err != nil {
+		return model.Entry{}, err
+	}
+	after, err := os.Lstat(path)
+	if err != nil {
+		return model.Entry{}, err
+	}
+	if size != before.Size() || !os.SameFile(before, after) || after.Size() != size ||
+		!after.ModTime().Equal(before.ModTime()) || after.Mode() != before.Mode() {
+		return model.Entry{}, changedTarget(relative)
+	}
+	return model.Entry{Path: relative, Hash: digest, Size: size, ModTime: before.ModTime().UnixNano(), Mode: uint32(before.Mode().Perm())}, nil
+}
+
 func hashFile(ctx context.Context, path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
 	defer file.Close()
+	digest, _, err := hashReader(ctx, file)
+	return digest, err
+}
+
+func hashReader(ctx context.Context, input io.Reader) (string, int64, error) {
 	hash := sha256.New()
-	buffer := make([]byte, 256*1024)
-	for {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		n, readErr := file.Read(buffer)
-		if n > 0 {
-			if _, err := hash.Write(buffer[:n]); err != nil {
-				return "", err
-			}
-		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return "", readErr
-		}
+	size, err := io.CopyBuffer(hash, &contextReader{ctx: ctx, reader: input}, make([]byte, 256*1024))
+	if err != nil {
+		return "", 0, err
 	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	return hex.EncodeToString(hash.Sum(nil)), size, nil
 }
 
 func ValidateRelativePath(path string) error {
