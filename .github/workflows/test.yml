@@ -1,5 +1,7 @@
 name: Test clients
 on:
+  push:
+    branches: [main, "codex/**"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -9,6 +11,7 @@ permissions:
 
 jobs:
   native:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     name: Go tests on ${{ matrix.os }}
     strategy:
       fail-fast: false
