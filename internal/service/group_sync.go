@@ -124,9 +124,6 @@ func (s *Service) dialGroup(ctx context.Context, sh model.Share, m model.ShareMe
 	if err := f.WriteJSON(protocol.Hello{Type: "hello", Operation: "group_sync", Protocol: model.ProtocolVersion, ShareID: sh.ID, DeviceID: cfg.DeviceID, DeviceName: cfg.DeviceName, ListenPort: s.listenPort}); err != nil {
 		return err
 	}
-	if _, err := readGroup(f, "group_ready"); err != nil {
-		return err
-	}
 	return s.groupSession(ctx, f, sh, m, peer, true)
 }
 
@@ -149,9 +146,6 @@ func (s *Service) receiveGroup(ctx context.Context, conn *tls.Conn, f *protocol.
 		return errors.New("此设备未获准同步这个文件夹")
 	}
 	conn.SetDeadline(time.Now().Add(sessionTimeout))
-	if err := f.WriteJSON(groupFrame{Type: "group_ready"}); err != nil {
-		return err
-	}
 	err = s.groupSession(ctx, f, sh, m, peer, false)
 	if err != nil {
 		return s.syncFailed(sh.ID, err)
@@ -231,6 +225,19 @@ func (s *Service) fetchGroupObjects(ctx context.Context, f *protocol.Framer, req
 }
 
 func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model.Share, member model.ShareMember, peer model.PairedDevice, client bool) error {
+	state, err := s.checkedGroupState(sh)
+	if err != nil {
+		return err
+	}
+	// Signal readiness only after reading our own journal. The peer can then
+	// receive a validation error before it starts sending policy or file data.
+	if client {
+		if _, err := readGroup(f, "group_ready"); err != nil {
+			return err
+		}
+	} else if err := f.WriteJSON(groupFrame{Type: "group_ready"}); err != nil {
+		return err
+	}
 	self := s.store.Config()
 	localRO, peerRO, err := s.groupPolicy(f, sh, member, client)
 	if err != nil {
@@ -241,10 +248,6 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 		return err
 	}
 	files := revisionManifest(manifest)
-	state, err := s.checkedGroupState(sh)
-	if err != nil {
-		return err
-	}
 	// Remove unsupported pre-upgrade relay entries before any newly
 	// encountered fork can accidentally legitimize a previously unknown ID.
 	if len(state.Resolved) > 0 {

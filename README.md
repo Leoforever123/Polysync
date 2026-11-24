@@ -51,8 +51,8 @@ Windows 安装版：打开 `polysync-windows-amd64.msi`，安装后从开始菜�
 Linux 用户可从 [官网下载页](https://leoforever123.github.io/Polysync/#downloads) 或 [GitHub Release](https://github.com/Leoforever123/Polysync/releases/latest) 点击下载 Ubuntu / Arch 安装包。下载后在所在目录打开终端：
 
 ```sh
-sudo apt install ./polysync_0.5.1-1_amd64.deb           # Ubuntu x86_64
-sudo pacman -U ./polysync-0.5.1-1-x86_64.pkg.tar.zst   # Arch x86_64
+sudo apt install ./polysync_0.5.2-1_amd64.deb           # Ubuntu x86_64
+sudo pacman -U ./polysync-0.5.2-1-x86_64.pkg.tar.zst   # Arch x86_64
 ```
 
 Ubuntu ARM64 使用对应的 `_arm64.deb`。安装后可从应用菜单打开，或运行 `polysync -tray=false`。后台服务可选用 `systemctl --user enable --now polysync.service`，安装过程不会自动启用。Linux 更新使用新版安装包，卸载保留个人数据；完整命令、依赖与验证范围见 [Linux 安装与更新](docs/linux-installation.md)。
@@ -93,7 +93,7 @@ Linux 或 macOS：
 
 从 Windows 复制 Linux/macOS 原始二进制后，需要先恢复执行权限：`chmod +x polysync-*`。
 
-在 Linux/WSL 中对上述二进制打包：`python3 scripts/package-linux.py --version 0.5.1 --format all`。需要 Python 3.11+、dpkg-deb 和 makepkg；也可单独指定 `--format deb` 或 `--format arch`。脚本校验 ELF 架构、静态链接以及构建生成的 `.build-info` 版本/哈希，输出安装包、离线 Arch 构建材料和独立的 `SHA256SUMS-linux-0.5.1-1-all.txt`。安装升级与交互验收见 [v0.5 验证记录](docs/experience-verification.md)。
+在 Linux/WSL 中对上述二进制打包：`python3 scripts/package-linux.py --version 0.5.2 --format all`。需要 Python 3.11+、dpkg-deb 和 makepkg；也可单独指定 `--format deb` 或 `--format arch`。脚本校验 ELF 架构、静态链接以及构建生成的 `.build-info` 版本/哈希，输出安装包、离线 Arch 构建材料和独立的 `SHA256SUMS-linux-0.5.2-1-all.txt`。安装升级与交互验收见 [v0.5 验证记录](docs/experience-verification.md)。
 
 ## 随传与新手引导
 

@@ -2,7 +2,7 @@
 
 - 同步文件夹的冲突处理回执会核对所属文件夹与冲突事件。多台设备仍能转交已经确认的处理结果。
 - 旧版设备发出文件夹接受确认时，邀请方会更新该成员的连接地址。设备在配对后更换局域网地址，后续同步会使用新的地址。
-- 组同步遇到损坏的本地版本记录时会停止这一轮，保留文件并返回错误。其他文件夹可以继续同步。
+- 组同步在通知对端准备就绪前先验证本地版本记录。发现损坏时，双方能收到具体原因，工作文件保留，其他文件夹可以继续同步。
 
 ## 下载与升级
 
@@ -10,11 +10,11 @@
 
 Android ARM64 预览版使用 dev.5 的应用包名和签名。已有预览版可直接更新，保留设备配对和工作区。dev.4 使用另一个包名，两个应用可以并装；需要的文件可从旧应用导出。在卸载任何一个应用之前，先导出该应用工作区内要保留的文件。
 
-有关多台设备如何共同编辑、跟随和授权回传，以及桌面和 Android 的动效验收，见[多设备文件夹](https://github.com/Leoforever123/Polysync/blob/v0.5.1/docs/folder-groups.md)与[体验验证记录](https://github.com/Leoforever123/Polysync/blob/v0.5.1/docs/experience-verification.md)。
+有关多台设备如何共同编辑、跟随和授权回传，以及桌面和 Android 的动效验收，见[多设备文件夹](https://github.com/Leoforever123/Polysync/blob/v0.5.2/docs/folder-groups.md)与[体验验证记录](https://github.com/Leoforever123/Polysync/blob/v0.5.2/docs/experience-verification.md)。
 
 ## 验证范围
 
 - 使用实际发布的 v0.5.0 与新版客户端互传文件，并在浏览器中处理修改与删除的冲突，两端均确认结果。另验证了 v0.4.0 的双向传输、重启和旧设备换地址。
 - 21 项组同步回归在竞态检测下连续通过 10 轮。Windows MSI、Ubuntu DEB 和 Arch 安装包均实测从 0.5.0 升级并保留原有数据。
 - Android 15 x86_64 模拟器通过 8 项仪器测试及与 Linux 的互通测试。dev.5 覆盖升级后能使用原配对、打开原工作区并导出文件。ARM64 包已验证安装、签名与 16 KiB 对齐，本轮未使用实体 ARM 手机。
-- Android 预览版版本为 `0.5.1-dev.6`，SHA-256 为 `0cfee0aeb51be9d6d9feab635564726510447d5989adec9c4bf64c26aa7efc4d`。
+- Android 预览版版本为 `0.5.2-dev.6`，SHA-256 见本次发布附带的校验清单。
