@@ -82,12 +82,16 @@ const server = http.createServer((req, res) => {
     await checkAndroidPreview();
     const latest = 'https://api.github.com/repos/Leoforever123/Polysync/releases/latest';
     const apk = 'polysync-android-arm64-preview.apk';
+    const newerTag = fallback.replace(/\d+$/, patch => String(Number(patch) + 1));
+    assert.notEqual(newerTag, fallback);
+    const newerAPK = `https://github.com/Leoforever123/Polysync/releases/download/${newerTag}/${apk}`;
     await page.unroute(latest);
     await page.route(latest, route => route.fulfill({json: {
-      tag_name: 'v0.5.1', assets: [{name: apk, browser_download_url: `https://github.com/Leoforever123/Polysync/releases/download/v0.5.1/${apk}`}],
+      tag_name: newerTag, assets: [{name: apk, browser_download_url: newerAPK}],
     }}));
     await page.reload();
-    await page.getByText('v0.5.1', {exact: true}).waitFor();
+    await page.getByText(newerTag, {exact: true}).waitFor();
+    assert.equal(await page.locator('.download-card[data-platform="android"]').getAttribute('href'), newerAPK);
     await checkAndroidPreview();
     assert.deepEqual(errors, []);
     console.log('Site browser checks passed: Windows/Ubuntu/Arch downloads, keyboard download, desktop/narrow layout, reduced motion, offline links and Android migration guidance.');
