@@ -125,19 +125,25 @@ func TestTransferAutoReceiveSaveAndRestart(t *testing.T) {
 	if err := b.SetTransferSettings(settings); err != nil {
 		t.Fatal(err)
 	}
+	// macOS temporary directories and Windows runner paths may be aliases.
+	// The store deliberately persists the fully resolved inbox.
+	inbox, err := filepath.EvalSymlinks(settings.Directory)
+	if err != nil {
+		t.Fatal(err)
+	}
 	again := sendTestTransfer(t, a, b, []string{"new inbox"})
 	if again.State != "complete" {
 		t.Fatal(again.Message)
 	}
 	newest := b.transfers.List()[0]
-	if filepath.Dir(newest.StorageDir) != settings.Directory || newest.StorageDir == task.StorageDir {
-		t.Fatal("inbox switch lost task location")
+	if filepath.Dir(newest.StorageDir) != inbox || newest.StorageDir == task.StorageDir {
+		t.Fatalf("new inbox %q, received in %q (old location %q)", inbox, newest.StorageDir, task.StorageDir)
 	}
 	loaded := newTransferManager(b.store.Dir())
 	if err := loaded.load(); err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.List()) != 2 || loaded.Settings().Directory != settings.Directory {
+	if len(loaded.List()) != 2 || loaded.Settings().Directory != inbox {
 		t.Fatal("settings or records lost after restart")
 	}
 	os.Remove(filepath.Join(task.StorageDir, task.Files[0].Blob))

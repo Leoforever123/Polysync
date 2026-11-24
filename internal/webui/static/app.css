@@ -381,3 +381,7 @@ button:disabled { transform: none; }
 .review-files li { padding: 6px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; font-size: 13px; }
 .review-files span { color: var(--soft-ink); }
 #writeback-preview { font-size: 14px; }
+
+#invite-pair { margin-top: 5px; }
+
+footer { justify-content: flex-end; }

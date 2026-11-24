@@ -157,6 +157,10 @@ const server = http.createServer((req,res) => {
   await longPage.evaluate(() => refreshTransfers());
   assert.ok(await longPage.locator("#transfer-task-history-0 progress").evaluate(n => n.value) > amount);
   assert.equal(await cancel.evaluate(n => n === document.activeElement), true);
+  tasks[0].state = "complete";
+  await longPage.evaluate(() => refreshTransfers());
+  assert.equal(await longPage.locator("#transfer-task-history-0 progress").count(), 0);
+  assert.equal(await longPage.locator("#transfer-task-history-0").evaluate(n => n === document.activeElement), true);
   await longPage.locator("#transfer-more").click();
   assert.equal(await longPage.locator(".transfer-task").count(), 48);
   await longPage.goto(base + "/#transfer/task/history-3999");

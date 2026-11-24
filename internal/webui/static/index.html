@@ -17,13 +17,13 @@
       <div class="top-actions">
         <span class="service-state"><i></i>服务在线</span>
         <button class="button ghost" id="add-device">添加设备</button>
-        <button class="button primary" id="add-share">添加同步</button>
+        <button class="button primary" id="add-share" hidden>添加同步</button>
       </div>
     </header>
 
     <nav class="workspace-nav" id="workspace-nav" aria-label="工作空间">
       <div><button data-workspace="sync" aria-current="true">同步</button><button data-workspace="transfer" aria-current="false">随传 <span aria-hidden="true">↗</span></button></div>
-      <button class="button ghost small" id="help-tour">使用引导</button>
+      <button class="button ghost small" id="help-tour" hidden>使用引导</button>
     </nav>
     <aside class="tour-invite" id="tour-invite" hidden><div><strong>第一次使用 PolySync？</strong><p>一分钟了解设备配对和文件夹同步。</p></div><div><button class="button ghost small" id="tour-dismiss">以后再说</button><button class="button primary small" id="tour-start">带我看看</button></div></aside>
     <main>
@@ -90,8 +90,6 @@
     </main>
 
     <footer>
-      <span id="protocol-version">PolySync</span>
-      <span>TCP 直连 · SHA-256 校验</span>
       <button class="button ghost small" id="open-update">版本与更新</button>
     </footer>
   </div>

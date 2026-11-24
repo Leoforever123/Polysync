@@ -1,4 +1,4 @@
-const state = { data: null, modal: null, selectedId: null, pairSession: null, modalGeneration: 0, statusRequest: 0, shareLimit: 24, toastTimer: null };
+const state = { data: null, modal: null, selectedId: null, pairSession: null, modalGeneration: 0, statusRequest: 0, shareLimit: 24, autoSaving: new Map(), toastTimer: null };
 const $ = selector => document.querySelector(selector);
 const escapeHTML = (value = "") => String(value).replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
 
@@ -64,7 +64,7 @@ async function refresh(silent = false) {
 
 function render() {
   const { device, shares, activities } = state.data;
-  $("#protocol-version").textContent = `PolySync · Protocol v${state.data.protocolVersion}`;
+  $("#add-share").hidden = !shares.length || $("#sync-workspace").hidden;
   const note = $("#background-note span");
   if (note) note.textContent = state.data.trayEnabled
     ? "关闭页面后继续同步，可从系统托盘打开或退出。"
@@ -132,6 +132,8 @@ function statusText(share) {
 function shareCard(share) {
   const status = share.status || { state: "idle" };
   const active = share.state === "active";
+  const saving = state.autoSaving.has(share.id);
+  const automatic = saving ? state.autoSaving.get(share.id) : share.autoSync;
   const members = share.members || [];
   const names = members.filter(member => member.deviceId !== state.data?.device?.id && member.state !== "unpaired").map(member => memberLabel(member));
   const group = names.length ? `<div class="share-devices">${share.localRole === "follower" ? roleLabel("follower", members[0]?.allowWriteBack) + " · " : ""}${escapeHTML(names.join("、"))}</div>` : "";
@@ -139,7 +141,7 @@ function shareCard(share) {
     ? '<button class="button small review-writeback">查看待回传修改</button>' : "";
   const canInvite = (active || share.state === "disconnected") && share.localRole !== "follower";
 
-  return `<article class="share-card" data-share-id="${escapeHTML(share.id)}"><div class="share-header"><div class="folder-icon"></div><div class="card-actions"><button class="button small sync-button" ${!active || status.state === "syncing" ? "disabled" : ""}>${status.state === "syncing" ? "同步中" : "立即同步"}</button>${canInvite ? '<button class="button small invite-member">添加设备</button>' : ""}<button class="icon-button more edit-button" aria-label="${escapeHTML(share.name)}的同步设置">•••</button></div></div><div class="share-name">${escapeHTML(share.name)}</div><div class="share-path" title="${escapeHTML(share.path)}">${escapeHTML(share.path)}</div>${group}${review}<div class="share-meta"><div class="status ${escapeHTML(status.state || "idle")}"><i class="status-dot"></i><span>${escapeHTML(statusText(share))}</span></div><label class="auto-control"><span>自动</span><span class="switch"><input class="auto-toggle" type="checkbox" ${share.autoSync ? "checked" : ""} ${!active ? "disabled" : ""}><i class="slider"></i></span></label></div></article>`;
+  return `<article class="share-card" data-share-id="${escapeHTML(share.id)}"><div class="share-header"><div class="folder-icon"></div><div class="card-actions"><button class="button small sync-button" ${!active || status.state === "syncing" ? "disabled" : ""}>${status.state === "syncing" ? "同步中" : "立即同步"}</button>${canInvite ? '<button class="button small invite-member">添加设备</button>' : ""}<button class="icon-button more edit-button" aria-label="${escapeHTML(share.name)}的同步设置">•••</button></div></div><div class="share-name">${escapeHTML(share.name)}</div><div class="share-path" title="${escapeHTML(share.path)}">${escapeHTML(share.path)}</div>${group}${review}<div class="share-meta"><div class="status ${escapeHTML(status.state || "idle")}"><i class="status-dot"></i><span>${escapeHTML(statusText(share))}</span></div><label class="auto-control"><span>自动</span><span class="switch"><input class="auto-toggle" type="checkbox" ${automatic ? "checked" : ""} ${!active || saving ? "disabled" : ""}><i class="slider"></i></span></label></div></article>`;
 }
 
 function renderShareList(shares) {
@@ -247,6 +249,12 @@ function dismissModal() {
     openNearby(previous);
     return;
   }
+  if (state.resumeInvite?.draft && ["nearby","pair"].includes(state.modal)) {
+    const resume = state.resumeInvite;
+    state.resumeInvite = null;
+    openShareInvite(state.data.shares.find(share => share.id === resume.shareID), resume.draft);
+    return;
+  }
   closeModal();
 }
 
@@ -288,19 +296,33 @@ async function beginPair(deviceId, address, trigger) {
   }
 }
 
-function openShareInvite(share) {
+function openShareInvite(share, draft, preferred) {
   const memberIDs = new Set([...(share?.members || []).filter(member => member.state !== "unpaired").map(member => member.deviceId), share?.peerDeviceId]);
   const devices = (state.data?.pairedDevices || []).filter(device => !memberIDs.has(device.id));
   if (!devices.length) {
-    state.resumeInvite = { shareID: share?.id };
+    state.resumeInvite = { shareID: share?.id, known: (state.data?.pairedDevices || []).map(device => device.id) };
     return openNearby();
   }
   const online = devices.filter(device => device.online);
-  const chosen = online.length === 1 ? online[0].id : devices.length === 1 ? devices[0].id : "";
+  const previous = preferred || draft?.device;
+  const chosen = devices.some(device => device.id === previous) ? previous : online.length === 1 ? online[0].id : devices.length === 1 ? devices[0].id : "";
   const options = devices.map(device => `<option value="${escapeHTML(device.id)}" ${device.id === chosen ? "selected" : ""}>${escapeHTML(device.name)} · ${device.online ? "在线" : "离线"}</option>`).join("");
   const local = share ? "" : `${pathField()}<details class="advanced"><summary>名称与同步频率</summary><div class="field"><label for="share-name">显示名称</label><input class="input" id="share-name" maxlength="80" placeholder="默认使用文件夹名称"></div><label class="check-row"><input id="auto-sync" type="checkbox" checked> 在线时自动同步</label><div class="field"><label for="interval">检查间隔</label><select class="select" id="interval"><option value="30">30 秒</option><option value="60">1 分钟</option><option value="300">5 分钟</option></select></div></details>`;
   state.selectedId = share?.id || null;
-  openModal(`<h2 id="modal-title">${share ? "为文件夹添加设备" : "添加同步文件夹"}</h2><p class="modal-intro">${share ? escapeHTML(share.name) + " · " + escapeHTML(share.path) : "对方接受邀请并选好本地文件夹后，就会开始同步。"}</p><form id="invite-form">${local}<div class="field"><label for="target-device">邀请设备</label><select class="select" id="target-device" required>${chosen ? "" : '<option value="">选择一台设备</option>'}${options}</select></div><div class="field"><label for="invite-role">这台设备如何同步</label><select class="select" id="invite-role"><option value="collaborator">共同编辑</option><option value="follower">跟随此文件夹</option></select><small id="role-note">各台共同编辑设备的修改会相互同步。</small></div><label class="check-row" id="write-back-row" hidden><input type="checkbox" id="allow-write-back"> 允许这台设备回传修改</label><p class="form-error" role="alert"></p><div class="modal-actions"><button class="button ghost" type="button" data-close>取消</button><button class="button primary" type="submit">发送邀请</button></div></form>`, "invite", share ? "#target-device" : "#share-path");
+  openModal(`<h2 id="modal-title">${share ? "为文件夹添加设备" : "添加同步文件夹"}</h2><p class="modal-intro">${share ? escapeHTML(share.name) + " · " + escapeHTML(share.path) : "对方接受邀请并选好本地文件夹后，就会开始同步。"}</p><form id="invite-form">${local}<div class="field"><label for="target-device">邀请设备</label><select class="select" id="target-device" required>${chosen ? "" : '<option value="">选择一台设备</option>'}${options}</select><button class="text-button" type="button" id="invite-pair">连接其他设备</button></div><div class="field"><label for="invite-role">这台设备如何同步</label><select class="select" id="invite-role"><option value="collaborator">共同编辑</option><option value="follower">跟随此文件夹</option></select><small id="role-note">各台共同编辑设备的修改会相互同步。</small></div><label class="check-row" id="write-back-row" hidden><input type="checkbox" id="allow-write-back"> 允许这台设备回传修改</label><p class="form-error" role="alert"></p><div class="modal-actions"><button class="button ghost" type="button" data-close>取消</button><button class="button primary" type="submit">发送邀请</button></div></form>`, "invite", share ? "#target-device" : "#share-path");
+  if (draft) {
+    $("#invite-role").value = draft.role;
+    $("#invite-role").dispatchEvent(new Event("change", {bubbles:true}));
+    $("#allow-write-back").checked = draft.write;
+    if (!share) {
+      $("#share-path").value = draft.path;
+      $("#share-name").value = draft.name;
+      $("#interval").value = draft.interval;
+      $("#auto-sync").checked = draft.auto;
+      $("#invite-form details").open = draft.advanced;
+    }
+  }
+
 }
 
 function pathField(value = "") {
@@ -493,6 +515,14 @@ document.addEventListener("click", async event => {
     finally { retry.disabled = false; retry.textContent = "重发邀请"; await refresh(true); }
     return;
   }
+  if (target.closest("#invite-pair")) {
+    state.resumeInvite = { shareID:state.selectedId, known:state.data.pairedDevices.map(device => device.id), draft:{
+      device:$("#target-device").value, role:$("#invite-role").value, write:$("#allow-write-back").checked,
+      path:$("#share-path")?.value, name:$("#share-name")?.value, interval:$("#interval")?.value,
+      auto:$("#auto-sync")?.checked, advanced:$("#invite-form details")?.open
+    }};
+    return openNearby();
+  }
   if (target.closest("#add-device")) return openNearby();
   if (target.closest("#add-share") || target.closest("#empty-add")) return openShareInvite();
   if (target.closest(".edit-device")) return openDeviceSettings();
@@ -561,10 +591,25 @@ document.addEventListener("change", async event => {
     $("#role-note").textContent = follow ? "从邀请设备接收更新。本机改动保留副本，默认不回传。" : "各台共同编辑设备的修改会相互同步。";
     return;
   }
-  if (!event.target.classList.contains("auto-toggle")) return;
-  const share = state.data.shares.find(item => item.id === event.target.closest(".share-card").dataset.shareId);
-  try { await api(`/api/shares/${share.id}`, { method: "PUT", body: JSON.stringify({ name: share.name, path: share.path, peerAddress: share.peerAddress || "", autoSync: event.target.checked, intervalSeconds: share.intervalSeconds }) }); toast(event.target.checked ? "已开启自动同步" : "已关闭自动同步"); }
-  catch (error) { event.target.checked = !event.target.checked; toast(error.message, true); }
+  const toggle = event.target;
+  if (!toggle.classList.contains("auto-toggle")) return;
+  const share = state.data.shares.find(item => item.id === toggle.closest(".share-card").dataset.shareId);
+  if (!share || state.autoSaving.has(share.id)) return;
+  const checked = toggle.checked;
+  state.autoSaving.set(share.id, checked);
+  toggle.disabled = true;
+  try {
+    await api(`/api/shares/${encodeURIComponent(share.id)}`, { method:"PUT", body:JSON.stringify({name:share.name, path:share.path, peerAddress:share.peerAddress || "", autoSync:checked, intervalSeconds:share.intervalSeconds})});
+    share.autoSync = checked;
+    toast(checked ? "已开启自动同步" : "已关闭自动同步");
+  } catch (error) {
+    toggle.checked = !checked;
+    toast(error.message, true);
+  } finally {
+    state.autoSaving.delete(share.id);
+    toggle.disabled = false;
+    await refresh(true);
+  }
 });
 
 document.addEventListener("submit", async event => {
@@ -590,8 +635,10 @@ document.addEventListener("submit", async event => {
       if (generation !== state.modalGeneration) return;
       const resume = state.resumeInvite;
       state.resumeInvite = null;
-      if (resume && state.data?.pairedDevices?.length) openShareInvite(state.data.shares.find(item => item.id === resume.shareID));
-      else finish();
+      if (resume && state.data?.pairedDevices?.length) {
+        const added = state.data.pairedDevices.filter(device => !resume.known.includes(device.id));
+        openShareInvite(state.data.shares.find(item => item.id === resume.shareID), resume.draft, added.length === 1 ? added[0].id : undefined);
+      } else finish();
       toast("设备配对成功");
     } else if (event.target.id === "invite-form") {
       const role = $("#invite-role").value;
@@ -618,7 +665,7 @@ document.addEventListener("submit", async event => {
         state.selectedId = error.details.id;
         submit.dataset.retry = "true";
         // This invitation already exists on disk. Retries must keep the same grant.
-        for (const control of form.querySelectorAll("input, select, .browse-button")) control.disabled = true;
+        for (const control of form.querySelectorAll("input, select, .browse-button, #invite-pair")) control.disabled = true;
       }
     }
     if (generation !== state.modalGeneration) return;

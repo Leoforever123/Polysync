@@ -1,5 +1,8 @@
 /* Temporary delivery is independent of synchronization folders. */
-const transferUI = { tasks: [], settings: null, files: [], uploading: null, visibleCount: 24, cancelRequested: false, taskID: null, loading: null, visibleCount: 24, cancelRequested: false };
+const transferUI = {
+  tasks: [], settings: null, files: [], uploading: false, taskID: null,
+  loading: null, visibleCount: 24, cancelRequested: false, linkedTask: null
+};
 const transferStates = { preparing: "正在准备", connecting: "正在连接", sending: "正在发送", receiving: "正在接收", verifying: "正在确认", complete: "已完成", failed: "失败", cancelled: "已取消", interrupted: "已中断" };
 function transferIsActive(value) { return ["preparing", "connecting", "sending", "receiving", "verifying"].includes(value); }
 function transferBytes(value) {
@@ -23,9 +26,10 @@ function setWorkspace(view) {
     previous.classList.remove("workspace-arrival");
     next.classList.add("workspace-arrival");
   }
-  $("#add-share").hidden = transfer;
+  $("#add-share").hidden = transfer || !state.data?.shares?.length;
   $("#sync-workspace").hidden = transfer;
   $("#transfer-workspace").hidden = !transfer;
+  if (typeof renderTourInvite === "function") renderTourInvite();
   document.querySelectorAll("[data-workspace]").forEach(button => button.setAttribute("aria-current", String(button.dataset.workspace === view)));
 }
 function renderTransferDevices() {
@@ -94,10 +98,20 @@ function renderTransferTasks() {
       const template = document.createElement("template"); template.innerHTML = html;
       node = template.content.firstElementChild; node._html = html;
       list.insertBefore(node, list.children[i] || null);
-    } else if (node._html !== html && !node.contains(document.activeElement)) {
+    } else if (node._html !== html && (!node.contains(document.activeElement) || node._state !== task.state)) {
+      const focused = node.contains(document.activeElement) ? document.activeElement : null;
       const template = document.createElement("template"); template.innerHTML = html;
-      const replacement = template.content.firstElementChild; replacement._html = html; node.replaceWith(replacement); node = replacement;
+      const replacement = template.content.firstElementChild; replacement._html = html;
+      node.replaceWith(replacement);
+      node = replacement;
+      if (focused) {
+        const action = focused.dataset.transferAction;
+        const index = focused.dataset.index;
+        const successor = action && [...node.querySelectorAll("[data-transfer-action]:enabled")].find(button => button.dataset.transferAction === action && button.dataset.index === index);
+        (successor || node).focus({preventScroll:true});
+      }
     }
+    node._state = task.state;
     const bar = node.querySelector("progress");
     const amount = task.total ? Math.min(100, Math.round(task.done / task.total * 100)) : 0;
     if (bar && bar.value !== amount) {
@@ -217,8 +231,9 @@ if (typeof document !== "undefined") {
       return;
     }
     if (button.id === "transfer-browse") {
+      const input = $("#transfer-directory");
       button.disabled = true;
-      try { const result = await api("/api/pick-folder", { method: "POST", body: "{}" }); if (result.path && $("#transfer-directory")) $("#transfer-directory").value = result.path; }
+      try { const result = await api("/api/pick-folder", { method: "POST", body: "{}" }); if (input.isConnected && result.path) input.value = result.path; }
       catch (error) { toast(error.message, true); } finally { button.disabled = false; } return;
     }
     const action = button.dataset.transferAction;
@@ -243,7 +258,7 @@ if (typeof document !== "undefined") {
     try {
       if (form.id === "transfer-settings-form") await api("/api/transfer-settings", { method: "PUT", body: JSON.stringify({ autoReceive: $("#transfer-auto").checked, directory: $("#transfer-directory").value.trim() }) });
       else await api("/api/transfers/" + encodeURIComponent(form.dataset.task) + "?files=" + $("#transfer-delete-files").checked, { method: "DELETE" });
-      closeModal(); await refreshTransfers(); toast(form.id === "transfer-settings-form" ? "随传设置已保存" : "记录已移除");
+      if (form.isConnected) closeModal(); await refreshTransfers(); toast(form.id === "transfer-settings-form" ? "随传设置已保存" : "记录已移除");
     } catch (error) { toast(error.message, true); button.disabled = false; }
   });
   $("#transfer-files").addEventListener("change", event => chooseTransferFiles(event.target.files));

@@ -1,4 +1,4 @@
-param([string]$Version = "0.4.0", [switch]$SkipMSI)
+param([string]$Version = "0.5.0", [switch]$SkipMSI)
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $DistDir = Join-Path $ProjectRoot "dist"

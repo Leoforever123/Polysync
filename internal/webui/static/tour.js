@@ -10,9 +10,18 @@ const tourSteps = [
 ];
 const tourState = { index: -1, returnFocus: null, key: "polysync-tour-v1" };
 function tourStorage(value) { try { if (value) localStorage.setItem(tourState.key, value); return localStorage.getItem(tourState.key); } catch { return null; } }
+function renderTourInvite() {
+  const show = !$("#sync-workspace").hidden && tourState.index < 0 && !tourStorage();
+  $("#tour-invite").hidden = !show;
+  $("#help-tour").hidden = show;
+}
+function tourTarget(step) {
+  if (step.target === "#add-share" && $("#add-share").hidden) return $("#empty-add") || $("#share-list");
+  return $(step.target);
+}
 function positionTour() {
   if (tourState.index < 0) return;
-  const rect = $(tourSteps[tourState.index].target).getBoundingClientRect();
+  const rect = tourTarget(tourSteps[tourState.index]).getBoundingClientRect();
   const spotlight = $("#tour-spotlight"), bubble = $("#tour-bubble");
   Object.assign(spotlight.style, { left: rect.left - 6 + "px", top: rect.top - 6 + "px", width: rect.width + 12 + "px", height: rect.height + 12 + "px" });
   const width = bubble.offsetWidth, height = bubble.offsetHeight, gap = 18;
@@ -28,8 +37,8 @@ function showTourStep(index) {
   $("#tour-prev").disabled = index === 0;
   $("#tour-next").textContent = index === tourSteps.length - 1 ? "开始使用" : "下一步";
   tourState.observer?.disconnect();
-  if (typeof ResizeObserver !== "undefined") { tourState.observer = new ResizeObserver(positionTour); tourState.observer.observe($(step.target)); }
-  $(step.target).scrollIntoView({ block: "center", behavior: "instant" });
+  if (typeof ResizeObserver !== "undefined") { tourState.observer = new ResizeObserver(positionTour); tourState.observer.observe(tourTarget(step)); }
+  tourTarget(step).scrollIntoView({ block: "center", behavior: "instant" });
   positionTour(); requestAnimationFrame(positionTour);
   $("#tour-next").focus({ preventScroll: true });
 }
@@ -54,11 +63,11 @@ function endTour(status = "skipped") {
   if (location.hash === "#tour") history.replaceState(null, "", "#sync");
 }
 if (typeof document !== "undefined") {
-  $("#tour-invite").hidden = !!tourStorage();
+  renderTourInvite();
   document.addEventListener("click", event => {
     const id = event.target.closest("button")?.id;
     if (id === "help-tour" || id === "tour-start") startTour();
-    if (id === "tour-dismiss") { tourStorage("skipped"); $("#tour-invite").hidden = true; }
+    if (id === "tour-dismiss") { tourStorage("skipped"); renderTourInvite(); $("#help-tour").focus({preventScroll:true}); }
     if (id === "tour-skip") endTour();
     if (id === "tour-prev" && tourState.index > 0) showTourStep(tourState.index - 1);
     if (id === "tour-next") { if (tourState.index === tourSteps.length - 1) endTour("completed"); else showTourStep(tourState.index + 1); }

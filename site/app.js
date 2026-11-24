@@ -73,6 +73,11 @@ async function refreshRelease() {
         name = assets.has("polysync-windows-amd64.msi") ? "polysync-windows-amd64.msi" : "polysync-windows-amd64.exe";
         element.querySelector("small").textContent = name.endsWith(".msi") ? "x64 · MSI 安装包" : "x64 · 免安装 EXE";
       }
+      if (element.dataset.platform === "android" && assets.has("polysync-android-arm64-preview.apk")) {
+        name = "polysync-android-arm64-preview.apk";
+        element.querySelector("small").textContent = "Android 10+ · ARM64 · 可与 dev.4 并装";
+        document.querySelector("#android-note").textContent = "首次打开需重新配对。旧工作区留在原应用中，需要的文件可从旧应用导出。";
+      }
       const url = assets.get(name);
       if (!url) {
         // The experimental Android channel has its own release and installation identity.

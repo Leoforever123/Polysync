@@ -12,7 +12,7 @@ function card(platform, asset, kind) {
 
 async function loadPage(navigator, cards, names, extras = [], commands = []) {
   const button = {}, label = {}, version = {}, picker = { addEventListener() {} };
-  const ids = { '#recommended-download': button, '#recommended-label': label, '#download-platform': picker, '#platform-picker': {} };
+  const ids = { '#android-note': {}, '#recommended-download': button, '#recommended-label': label, '#download-platform': picker, '#platform-picker': {} };
   const groups = { '.download-card': cards, '[data-asset]': [...cards, ...extras], '[data-version]': [version], '[data-install]': commands };
   const context = { navigator, document: {
     querySelector: id => ids[id], querySelectorAll: selector => groups[selector] || [],
@@ -68,4 +68,15 @@ test('missing platform assets do not silently download an old desktop version', 
   const {button} = await loadPage({platform: 'Win32'}, [win], ['SHA256SUMS.txt']);
   assert.equal(win.hidden, true);
   assert.equal(button.href, '#downloads');
+});
+
+test('the independently signed Android preview is selected only when actually published', async () => {
+  const name = 'polysync-android-arm64-preview.apk';
+  for (const published of [false, true]) {
+    const app = card('android', 'old.apk');
+    await loadPage({userAgent: 'Android'}, [app], published ? [name] : ['SHA256SUMS.txt']);
+    assert.equal(app.href, published ? 'new/' + name : 'fallback/old.apk');
+    assert.equal(app.hidden, false);
+    if (published) assert.match(app.querySelector('small').textContent, /并装/);
+  }
 });
