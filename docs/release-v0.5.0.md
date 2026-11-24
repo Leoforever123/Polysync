@@ -14,3 +14,9 @@ Android 实验版支持独立的应用内工作区。新版包可与 dev.4 并�
 ## 下载与升级
 
 Windows x64 推荐 MSI，另有便携 EXE。Ubuntu 提供 amd64 和 arm64 安装包，Arch 提供 x86_64 安装包。macOS 提供 Apple 芯片和 Intel 两种程序。原安装渠道升级时，先等任务结束并退出旧程序，继续使用原数据目录。Windows 安装包和 macOS 程序尚未做发布者签名。下载后的 SHA-256 可在同页校验清单中核对。
+
+## 验证范围
+
+Windows、macOS 与 Linux 使用各自系统运行 Go 原生测试。Windows 测试覆盖托盘操作、MSI 安装、更新助手重启和卸载后数据保留。Linux 使用独立根目录实际运行 dpkg 和 pacman 的安装升级流程。桌面浏览器测试覆盖三实例同步、仅接收与回传授权，以及四千条历史下的滚动和刷新。
+
+Android ARM64 预览包为 `0.5.0-dev.5`，SHA-256 为 `5fb3cbb18eb2adcfdeaaf5f328b50b1a4df43c923ff250d9444a41164aaf85ed`。已核验签名、16 KiB 对齐和与旧版并装。行为测试使用 Android 15 x86_64 模拟器，包括与桌面的 TLS 互通。本轮没有 ARM 真机运行结果，官方 x86 转译器运行新旧 ARM APK 均会在读取 ARM 系统寄存器时退出。

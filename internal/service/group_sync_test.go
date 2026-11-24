@@ -112,10 +112,15 @@ func groupLink(t *testing.T, group string, from, to *groupTestNode, role string,
 		if _, ok := to.s.store.Share(group); ok {
 			params = map[string]any{}
 		}
+		previousAttempt := to.s.Statuses()[group].LastAttempt
 		groupJSON(t, to, "/api/share-invitations/"+inv.ID+"/accept", params)
 		deadline := time.Now().Add(5 * time.Second)
 		for {
-			if st := to.s.Statuses()[group]; st.State == "synced" || st.State == "error" {
+			if st := to.s.Statuses()[group]; st.LastAttempt.After(previousAttempt) && (st.State == "synced" || st.State == "error") {
+				// The status must belong to this invitation, even when an existing
+				// group was already synced before adding another edge.
+				verifyGroupApplied(t, to, group)
+				verifyGroupApplied(t, from, group)
 				break
 			}
 			if time.Now().After(deadline) {
