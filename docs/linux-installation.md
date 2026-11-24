@@ -1,14 +1,14 @@
 # Linux 安装与更新
 
-提供 Ubuntu amd64/arm64 的 `.deb`、Arch x86_64 的 `.pkg.tar.zst` 和离线 `PKGBUILD` 构建包。主入口是 [官网下载页](https://leoforever123.github.io/Polysync/#downloads) 或 [GitHub Release](https://github.com/Leoforever123/Polysync/releases/latest)，点击对应平台即可下载。尚未发布到 APT 软件源、AUR 或发行版官方仓库。下面以 0.4.0、打包修订号 1 为例。
+提供 Ubuntu amd64/arm64 的 `.deb`、Arch x86_64 的 `.pkg.tar.zst` 和离线 `PKGBUILD` 构建包。主入口是 [官网下载页](https://leoforever123.github.io/Polysync/#downloads) 或 [GitHub Release](https://github.com/Leoforever123/Polysync/releases/latest)，点击对应平台即可下载。尚未发布到 APT 软件源、AUR 或发行版官方仓库。下面以 0.5.0、打包修订号 1 为例。
 
 ## Ubuntu
 
-下载与你的架构匹配的包及同批 `SHA256SUMS-linux-0.4.0-1-all.txt`，核对对应文件的 SHA-256，然后安装：
+下载与你的架构匹配的包及同批 `SHA256SUMS-linux-0.5.0-1-all.txt`，核对对应文件的 SHA-256，然后安装：
 
 ```sh
-sudo apt install ./polysync_0.4.0-1_amd64.deb
-# ARM64 使用 polysync_0.4.0-1_arm64.deb
+sudo apt install ./polysync_0.5.0-1_amd64.deb
+# ARM64 使用 polysync_0.5.0-1_arm64.deb
 ```
 
 程序本身为静态 Go 可执行文件。菜单启动需要 systemd 用户会话、`xdg-utils` 和用于等待本地控制台就绪的 `curl`，包以 Recommends 声明；Arch 中列为可选依赖。原生文件选择器可选安装 `zenity` 或 `kdialog`。无图形界面也能直接运行后台核心。
@@ -18,10 +18,10 @@ sudo apt install ./polysync_0.4.0-1_amd64.deb
 在网页点击 **Arch Linux** 下载 `.pkg.tar.zst`，不需要 AUR 账号或 yay。在下载目录打开终端，核对同批校验值后安装：
 
 ```sh
-sudo pacman -U ./polysync-0.4.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./polysync-0.5.0-1-x86_64.pkg.tar.zst
 ```
 
-也可将 `polysync-0.4.0-1-arch-build.tar.gz` 解压到一个新目录，检查 `PKGBUILD` 后以普通用户构建安装：
+也可将 `polysync-0.5.0-1-arch-build.tar.gz` 解压到一个新目录，检查 `PKGBUILD` 后以普通用户构建安装：
 
 ```sh
 makepkg -si
@@ -35,7 +35,7 @@ makepkg -si
 
 候选配方在 `packaging/aur/polysync-bin/`，包含 `PKGBUILD`、makepkg 生成的 `.SRCINFO`、菜单启动器、用户服务和图标。仅支持 x86_64，提供 `polysync` 并声明与现有同名包冲突。程序从固定版本 GitHub Release 下载，以 SHA-256 校验；辅助文件直接随 AUR 配方提交。不会把二进制或本地缓存提交到 AUR。
 
-配方固定为 0.4.0 二进制。项目所有者选择保留所有权利，包标注为 `LicenseRef-Proprietary`，声明随包安装至 `/usr/share/licenses/polysync-bin/LICENSE`，不表示项目采用了开源许可证。AUR 推送仍需维护账户绑定 SSH 公钥。更换发布二进制后必须更新校验值并重测，不能使用 SKIP。
+配方固定为 0.5.0 二进制。项目所有者选择保留所有权利，包标注为 `LicenseRef-Proprietary`，声明随包安装至 `/usr/share/licenses/polysync-bin/LICENSE`，不表示项目采用了开源许可证。AUR 推送仍需维护账户绑定 SSH 公钥。更换发布二进制后必须更新校验值并重测，不能使用 SKIP。
 
 本地构建验收（需要上一节所述的 makepkg 工具环境）：
 
@@ -45,14 +45,14 @@ python3 tests/aur-packaging.integration.py
 
 该测试在临时目录使用本地的固定哈希二进制，验证实际构建、元数据、版本、桌面入口、AUR 源码包不含二进制，以及载荷被篡改时构建校验失败。已在 Ubuntu WSL 的 makepkg 7.1 环境通过，不代表已在 AUR 上线或已做完整 Arch 桌面验收。
 
-公开下载就绪后，重新生成 `.SRCINFO` 并运行在线验收：
+更新配方时重新生成 `.SRCINFO`，从公开 Release 下载二进制并构建验收：
 
 ```sh
 (cd packaging/aur/polysync-bin && makepkg --printsrcinfo > .SRCINFO)
 python3 tests/aur-packaging.integration.py --download
 ```
 
-在线验收必须从空缓存下载公开 Release 后构建。通过后，才将上述候选目录的文件提交至 `ssh://aur@aur.archlinux.org/polysync-bin.git`，并再次查询 AUR、在干净 Arch 环境通过 yay 验证安装。目前所有者没有 AUR 账号，测试没有上传或创建包。
+v0.5.0 已在 Arch Linux 从空缓存下载公开二进制，完成构建、桌面入口验证与损坏文件拒绝测试。正式发布到 AUR 时，再将上述候选目录的文件提交至 `ssh://aur@aur.archlinux.org/polysync-bin.git`，并再次查询 AUR、在干净 Arch 环境通过 yay 验证安装。目前所有者没有 AUR 账号，测试没有上传或创建包。
 
 账号入口为 https://aur.archlinux.org/register 。2026-10-25 自动检查只返回 Anubis 验证页面，未能确认注册是否重新开放；官方邮件列表此前宣布暂停注册且没有人工开户通道。请本人在浏览器查看实际状态，注册可用时完成邮箱验证，再配置 SSH 公钥。若仍关闭，只能等待恢复或由已有账户的维护者自愿接手，不应把尚未发布的候选配方描述为可通过 yay 安装。
 
@@ -107,11 +107,11 @@ systemctl --user daemon-reload
 
 ## 本地构建
 
-先运行 `scripts/build.sh 0.4.0` 或 PowerShell 的 `scripts/build.ps1` 构建带版本号的静态二进制，然后在 Linux/WSL 中执行：
+先运行 `scripts/build.sh 0.5.0` 或 PowerShell 的 `scripts/build.ps1` 构建带版本号的静态二进制，然后在 Linux/WSL 中执行：
 
 ```sh
-python3 scripts/package-linux.py --version 0.4.0 --format deb
-python3 scripts/package-linux.py --version 0.4.0 --format arch
+python3 scripts/package-linux.py --version 0.5.0 --format deb
+python3 scripts/package-linux.py --version 0.5.0 --format arch
 # 两套工具均已准备好时：--format all
 ```
 

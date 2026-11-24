@@ -63,7 +63,33 @@ const server = http.createServer((req, res) => {
     await page.reload();
     const fallback = await page.locator('[data-version]').textContent();
     assert.ok((await arch.getAttribute('href')).endsWith('/' + fallback + '/polysync-' + fallback.slice(1) + '-1-x86_64.pkg.tar.zst'));
+    const fallbackLinks = await page.locator('a[data-asset]').evaluateAll(links =>
+      links.map(link => ({asset: link.dataset.asset, href: link.href})));
+    for (const {asset, href} of fallbackLinks) {
+      assert.equal(href, `https://github.com/Leoforever123/Polysync/releases/download/${fallback}/${asset}`);
+    }
+    async function checkAndroidPreview() {
+      await picker.selectOption('android');
+      const android = page.locator('.download-card[data-platform="android"]');
+      assert.equal(await android.isVisible(), true);
+      assert.match(await android.getAttribute('href'), /polysync-android-arm64-preview\.apk$/);
+      assert.match(await android.innerText(), /并装/);
+      assert.match(await page.locator('#android-note').innerText(), /重新配对.*旧应用导出/);
+      assert.equal(await page.getByText(/卸载会删除该应用工作区中的文件/).isVisible(), true);
+      await page.locator('summary').click();
+      assert.equal(await page.getByText('桌面端更新：').isVisible(), false);
+    }
+    await checkAndroidPreview();
+    const latest = 'https://api.github.com/repos/Leoforever123/Polysync/releases/latest';
+    const apk = 'polysync-android-arm64-preview.apk';
+    await page.unroute(latest);
+    await page.route(latest, route => route.fulfill({json: {
+      tag_name: 'v0.5.1', assets: [{name: apk, browser_download_url: `https://github.com/Leoforever123/Polysync/releases/download/v0.5.1/${apk}`}],
+    }}));
+    await page.reload();
+    await page.getByText('v0.5.1', {exact: true}).waitFor();
+    await checkAndroidPreview();
     assert.deepEqual(errors, []);
-    console.log('Site browser checks passed: Windows/Ubuntu/Arch downloads, keyboard download, desktop/narrow layout, reduced motion, API failure fallback. No new dialogs.');
+    console.log('Site browser checks passed: Windows/Ubuntu/Arch downloads, keyboard download, desktop/narrow layout, reduced motion, offline links and Android migration guidance.');
   } finally { if (browser) await browser.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(error => { console.error(error); process.exitCode = 1; server.close(); });
