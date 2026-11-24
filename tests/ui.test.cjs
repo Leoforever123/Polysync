@@ -183,3 +183,18 @@ test("a missing peer takes the user straight into pairing and cancel clears the 
   a.run("dismissModal()");
   assert.equal(a.run("state.resumeInvite"), null);
 });
+
+test("text comparison distinguishes an unknown ancestor from an empty ancestor", async () => {
+  for (const baseHash of ["", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"]) {
+    const a = app();
+    a.context.fetch = async () => ({ok:true, json:async () => ({
+      conflict: {id:"c", path:"draft.txt", localDevice:"A", remoteDevice:"B", baseHash},
+      text:true, base:"", local:"one", remote:"two", merged:"one"
+    })});
+    await a.run('openConflict("c")');
+    const markup = a.node("#modal-content").innerHTML;
+    assert.equal(markup.includes('id="merge-base"'), Boolean(baseHash));
+    assert.equal(markup.includes("没有可核对的共同版本"), !baseHash);
+    assert.ok(markup.includes('id="merge-local"') && markup.includes('id="merge-remote"'));
+  }
+});

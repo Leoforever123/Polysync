@@ -182,7 +182,8 @@ footer { min-height: 80px; border-top: 1px solid var(--line); display: flex; jus
 .modal-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 24px; }
 .code-box { background: var(--wash); border: 1px solid var(--line); border-radius: 10px; padding: 13px; font: 11px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; margin: 10px 0; user-select: all; }
 .pair-entry { font: 750 30px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .2em; text-align: center; }
-.merge-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 15px 0; }
+.merge-grid { display: grid; grid-template-columns: repeat(var(--version-count, 3), minmax(0, 1fr)); gap: 8px; margin: 15px 0; }
+.merge-grid.two-versions { --version-count: 2; }
 .merge-pane label { display: block; color: var(--soft-ink); font-size: 11px; font-weight: 700; margin-bottom: 6px; }
 .merge-text { width: 100%; min-height: 180px; resize: vertical; border: 1px solid var(--line); border-radius: 8px; background: var(--wash); padding: 9px; font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .merge-editor { min-height: 230px; background: var(--card); }

@@ -350,7 +350,12 @@ async function openConflict(id) {
     if (generation !== state.modalGeneration) return;
     state.selectedId = id;
     const c = content.conflict;
-    const panes = content.text ? `<div class="merge-grid"><div class="merge-pane"><label>共同旧版本</label><textarea class="merge-text" readonly>${escapeHTML(content.base)}</textarea></div><div class="merge-pane"><label>${escapeHTML(c.localDevice)}</label><textarea class="merge-text" readonly>${escapeHTML(content.local)}</textarea></div><div class="merge-pane"><label>${escapeHTML(c.remoteDevice)}</label><textarea class="merge-text" readonly>${escapeHTML(content.remote)}</textarea></div></div><div class="field"><label for="merge-content">合并结果</label><textarea class="merge-text merge-editor" id="merge-content">${escapeHTML(content.merged)}</textarea></div>` : `<div class="warning">这是二进制文件或文件过大，不能在浏览器中进行文本合并。</div>`;
+    const pane = (id, label, value) => `<div class="merge-pane"><label for="${id}">${escapeHTML(label)}</label><textarea id="${id}" class="merge-text" readonly>${escapeHTML(value)}</textarea></div>`;
+    const base = c.baseHash ? pane("merge-base", "共同旧版本", content.base) : "";
+    const panes = content.text ? `${base ? "" : '<p class="modal-intro">没有可核对的共同版本，请比较两台设备的内容。</p>'}
+      <div class="merge-grid${base ? "" : " two-versions"}">${base}${pane("merge-local", c.localDevice, content.local)}${pane("merge-remote", c.remoteDevice, content.remote)}</div>
+      <div class="field"><label for="merge-content">合并结果</label><textarea class="merge-text merge-editor" id="merge-content">${escapeHTML(content.merged)}</textarea></div>`
+      : '<div class="warning">这是二进制文件或文件过大，不能在浏览器中进行文本合并。</div>';
     openModal(`<h2 id="modal-title">解决文件冲突</h2><p class="modal-intro">${escapeHTML(c.path)} · ${escapeHTML(conflictKind(c.kind))}</p>${panes}<div class="choice-actions"><button class="button small resolve-choice" data-choice="local">使用本机版本</button><button class="button small resolve-choice" data-choice="remote">使用对端版本</button><button class="button small danger resolve-choice" data-choice="delete">删除文件</button>${content.text ? `<button class="button primary small resolve-choice" data-choice="merged">保存合并结果</button>` : ""}</div>`, "conflict");
   } catch (error) { if (generation === state.modalGeneration) $("#conflict-loading").textContent = error.message; }
 }
