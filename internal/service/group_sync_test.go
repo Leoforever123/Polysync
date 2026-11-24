@@ -366,7 +366,10 @@ func TestGroupConflictCopyPreservesExistingUserFile(t *testing.T) {
 	left, right := "A changed", "B changed"
 	sumA, sumB := sha256.Sum256([]byte(left)), sha256.Sum256([]byte(right))
 	shorter := min(hex.EncodeToString(sumA[:]), hex.EncodeToString(sumB[:]))
-	first := groupConflictName("notes.txt", shorter)
+	first, err := groupConflictName("notes.txt", shorter)
+	if err != nil {
+		t.Fatal(err)
+	}
 	loser := a
 	if shorter == hex.EncodeToString(sumB[:]) {
 		loser = b
@@ -388,17 +391,17 @@ func TestGroupConflictCopyPreservesExistingUserFile(t *testing.T) {
 func TestGroupReceiveOnlyOfferRejectsRecordsBeforeFetchingContent(t *testing.T) {
 	valid := model.GroupRevision{Entry: model.Entry{Path: "published", Hash: strings.Repeat("a", 64)}, Clock: map[string]uint64{"replica": 1}}
 	records := model.Revisions{"published": valid}
-	if err := validateGroupOffer(records, false); err != nil {
+	if err := validateGroupOffer("group", records, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateGroupOffer(records, true); err == nil {
+	if err := validateGroupOffer("group", records, true); err == nil {
 		t.Fatal("read-only grant accepted a file advertisement")
 	}
 	valid.Hash = ""
-	if err := validateGroupOffer(model.Revisions{"published": valid}, true); err == nil {
+	if err := validateGroupOffer("group", model.Revisions{"published": valid}, true); err == nil {
 		t.Fatal("read-only grant accepted a deletion advertisement")
 	}
-	if err := validateGroupOffer(nil, true); err != nil {
+	if err := validateGroupOffer("group", nil, true); err != nil {
 		t.Fatal(err)
 	}
 }

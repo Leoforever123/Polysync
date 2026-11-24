@@ -185,7 +185,7 @@ func (s *Service) ResolveConflict(ctx context.Context, id, choice, merged string
 		if !exists || share.State != "active" || (share.LocalRole == model.RoleFollower && (len(share.Members) != 1 || !share.Members[0].AllowWriteBack)) {
 			return errors.New("当前文件夹没有回传权限")
 		}
-		state, err := s.store.GroupState(share.ReplicaID)
+		state, err := s.checkedGroupState(share)
 		if err != nil {
 			return err
 		}

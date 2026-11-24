@@ -241,9 +241,17 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 		return err
 	}
 	files := revisionManifest(manifest)
-	state, err := s.store.GroupState(sh.ReplicaID)
+	state, err := s.checkedGroupState(sh)
 	if err != nil {
 		return err
+	}
+	// Remove unsupported pre-upgrade relay entries before any newly
+	// encountered fork can accidentally legitimize a previously unknown ID.
+	if len(state.Resolved) > 0 {
+		state.Resolved, err = s.confirmedDecisions(sh, state, state.Resolved, false)
+		if err != nil {
+			return err
+		}
 	}
 	if err = observeGroup(&state, files, sh.ReplicaID, !localRO); err != nil {
 		return err
@@ -281,7 +289,7 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 	if err = validateGroupDecisions(frame.Resolved, peerRO); err != nil {
 		return err
 	}
-	if err = validateGroupOffer(frame.Records, peerRO); err != nil {
+	if err = validateGroupOffer(sh.ID, frame.Records, peerRO); err != nil {
 		return err
 	}
 	if !client {
@@ -293,6 +301,10 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 	var conflicts []model.PlanConflict
 	switch {
 	case localRO:
+		for n, r := range frame.Records {
+			r.Forks = followerForks(state.Records[n], r)
+			frame.Records[n] = r
+		}
 		desired = frame.Records
 		if desired == nil {
 			desired = make(model.Revisions)
@@ -300,10 +312,13 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 	case peerRO:
 		desired = state.Records
 	default:
-		desired, conflicts, err = mergeGroup(state.Records, frame.Records)
+		desired, conflicts, err = mergeGroup(sh.ID, state.Records, frame.Records)
 		if err != nil {
 			return err
 		}
+	}
+	if err = validateGroupOffer(sh.ID, desired, false); err != nil {
+		return err
 	}
 	required := make(map[string]model.Entry)
 	expected := make(map[string]string, len(files))

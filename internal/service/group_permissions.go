@@ -138,7 +138,7 @@ func (s *Service) previewWriteBack(ctx context.Context, sh model.Share) (writeBa
 	if sh.LocalRole != model.RoleFollower || len(sh.Members) != 1 || !sh.Members[0].WriteBackPending {
 		return out, errors.New("没有待确认的回传授权")
 	}
-	state, err := s.store.GroupState(sh.ReplicaID)
+	state, err := s.checkedGroupState(sh)
 	if err != nil {
 		return out, err
 	}

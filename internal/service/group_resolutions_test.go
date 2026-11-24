@@ -247,7 +247,7 @@ func TestGroupObserveRepairsSizeWithoutInventingChangeOrAncestor(t *testing.T) {
 	parent := strings.Repeat("d", 64)
 	a := model.GroupRevision{Entry: model.Entry{Path: "n", Hash: hash}, Clock: map[string]uint64{"a": 2}, Parent: &model.GroupAncestor{Hash: parent, Clock: map[string]uint64{"a": 1}}}
 	b := model.GroupRevision{Entry: model.Entry{Path: "n", Hash: strings.Repeat("e", 64)}, Clock: map[string]uint64{"b": 2}, Parent: &model.GroupAncestor{Hash: parent, Clock: map[string]uint64{"b": 1}}}
-	_, conflicts, err := mergeGroup(model.Revisions{"n": a}, model.Revisions{"n": b})
+	_, conflicts, err := mergeGroup("group", model.Revisions{"n": a}, model.Revisions{"n": b})
 	if err != nil || len(conflicts) != 1 || conflicts[0].BaseHash != "" {
 		t.Fatalf("equal bytes were mistaken for a common ancestor: %v %v", conflicts, err)
 	}

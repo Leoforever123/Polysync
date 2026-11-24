@@ -205,8 +205,12 @@ type GroupAncestor struct {
 	Clock map[string]uint64 `json:"clock"`
 }
 
+// A fork witness identifies the two immutable branches merged at one path.
+type GroupFork [2]GroupAncestor
+
 type GroupRevision struct {
-	Parent *GroupAncestor `json:"parent,omitempty"`
+	Forks  map[string]GroupFork `json:"forks,omitempty"`
+	Parent *GroupAncestor       `json:"parent,omitempty"`
 	Entry
 	ConflictOrigin string            `json:"conflictOrigin,omitempty"`
 	Clock          map[string]uint64 `json:"clock"`

@@ -58,7 +58,7 @@ func observeGroup(state *model.GroupState, files map[string]model.Entry, device 
 		}
 		clock[device]++
 		e.Path = name
-		next := model.GroupRevision{Entry: e, Clock: clock, ConflictOrigin: old.ConflictOrigin}
+		next := model.GroupRevision{Entry: e, Clock: clock, ConflictOrigin: old.ConflictOrigin, Forks: old.Forks}
 		if old.Hash != "" && len(old.Clock) > 0 {
 			next.Parent = &model.GroupAncestor{Hash: old.Hash, Clock: old.Clock}
 		}
@@ -89,7 +89,7 @@ func dominates(a, b map[string]uint64) bool {
 	return true
 }
 
-func validateGroupOffer(records model.Revisions, readOnly bool) error {
+func validateGroupOffer(shareID string, records model.Revisions, readOnly bool) error {
 	if readOnly && len(records) > 0 {
 		return errors.New("此跟随设备仅有接收权限")
 	}
@@ -97,8 +97,11 @@ func validateGroupOffer(records model.Revisions, readOnly bool) error {
 		if err := syncer.ValidateRelativePath(name); err != nil {
 			return err
 		}
-		if (rev.ConflictOrigin != "" && len(rev.ConflictOrigin) != sha256.Size*2) || name != rev.Path || rev.Size < 0 || rev.Size > 16<<30 || len(rev.Clock) == 0 || len(rev.Clock) > 1024 {
+		if (rev.ConflictOrigin != "" && !validHex(rev.ConflictOrigin, sha256.Size)) || name != rev.Path || rev.Size < 0 || rev.Size > 16<<30 || len(rev.Clock) == 0 || len(rev.Clock) > 1024 {
 			return errors.New("无效的文件版本记录")
+		}
+		if err := validateForks(shareID, name, rev); err != nil {
+			return err
 		}
 		if !validClock(rev.Clock) {
 			return errors.New("无效的设备版本")
@@ -134,15 +137,106 @@ func validClock(clock map[string]uint64) bool {
 
 // The same logical fork has the same identity whichever neighbor saw it first.
 // Individual branches matter: a later recurrence can have identical file bytes.
-func groupFork(name string, a, b model.GroupRevision) (string, error) {
-	if a.Hash > b.Hash {
-		a, b = b, a
-	}
+func forkID(name string, fork model.GroupFork) (string, error) {
+	a, b := fork[0], fork[1]
 	h := sha256.New()
 	if err := json.NewEncoder(h).Encode([]any{name, a.Hash, a.Clock, b.Hash, b.Clock}); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func conflictID(shareID, event string) string {
+	h := sha256.Sum256([]byte(shareID + "\x00" + event))
+	return hex.EncodeToString(h[:16])
+}
+
+func validateForks(shareID, name string, rev model.GroupRevision) error {
+	// An immutable pair of branch versions can only describe one conflict.
+	slots := make(map[string]bool, len(rev.Forks))
+	for id, fork := range rev.Forks {
+		a, b := fork[0], fork[1]
+		if a.Hash >= b.Hash || (a.Hash != "" && !validHex(a.Hash, sha256.Size)) || !validHex(b.Hash, sha256.Size) ||
+			!validClock(a.Clock) || !validClock(b.Clock) || dominates(a.Clock, b.Clock) || dominates(b.Clock, a.Clock) ||
+			!dominates(rev.Clock, a.Clock) || !dominates(rev.Clock, b.Clock) {
+			return errors.New("分叉与该文件的版本不一致")
+		}
+		merged := joinClock(a.Clock, b.Clock)
+		if maps.Equal(merged, rev.Clock) && rev.Hash != b.Hash {
+			return errors.New("分叉与已提交的文件内容不一致")
+		}
+		expected, err := forkID(name, fork)
+		if err != nil || id != conflictID(shareID, expected) {
+			return errors.New("文件分叉摘要无效")
+		}
+		left, err := json.Marshal(a.Clock)
+		if err != nil {
+			return err
+		}
+		right, err := json.Marshal(b.Clock)
+		if err != nil {
+			return err
+		}
+		x, y := string(left), string(right)
+		slot := min(x, y) + "|" + max(x, y)
+		if slots[slot] {
+			return errors.New("同一分叉版本出现了不同内容")
+		}
+		slots[slot] = true
+	}
+	return nil
+}
+
+// Keep witnesses already sealed into our copy. An offer can introduce a
+// witness only as part of causal history we have not previously accepted.
+func inheritForks(local, remote model.GroupRevision) map[string]model.GroupFork {
+	forks := maps.Clone(local.Forks)
+	for id, fork := range remote.Forks {
+		if contradictsBranch(local, fork[0]) || contradictsBranch(local, fork[1]) {
+			continue
+		}
+		if dominates(local.Clock, fork[0].Clock) && dominates(local.Clock, fork[1].Clock) {
+			continue
+		}
+		if forks == nil {
+			forks = make(map[string]model.GroupFork)
+		}
+		forks[id] = fork
+	}
+	return forks
+}
+
+func contradictsBranch(local model.GroupRevision, branch model.GroupAncestor) bool {
+	if maps.Equal(local.Clock, branch.Clock) {
+		return local.Hash != branch.Hash
+	}
+	return local.Parent != nil && maps.Equal(local.Parent.Clock, branch.Clock) && local.Parent.Hash != branch.Hash
+}
+
+// A follow-only replica can move to an upstream with a different history.
+// Only witnesses supported by the authoritative revision survive that switch.
+func followerForks(local, remote model.GroupRevision) map[string]model.GroupFork {
+	forks := inheritForks(local, remote)
+	for id, fork := range forks {
+		if !dominates(remote.Clock, fork[0].Clock) || !dominates(remote.Clock, fork[1].Clock) {
+			delete(forks, id)
+		}
+	}
+	return forks
+}
+
+func (s *Service) checkedGroupState(sh model.Share) (model.GroupState, error) {
+	state, err := s.store.GroupState(sh.ReplicaID)
+	if err == nil {
+		err = validateGroupOffer(sh.ID, state.Records, false)
+	}
+	if err == nil {
+		err = validateGroupOffer(sh.ID, state.Pending, false)
+	}
+	if err != nil {
+		return state, fmt.Errorf("本机文件版本记录无法读取：%w", err)
+	}
+	return state, nil
 }
 
 func joinClock(a, b map[string]uint64) map[string]uint64 {
@@ -153,14 +247,17 @@ func joinClock(a, b map[string]uint64) map[string]uint64 {
 	return c
 }
 
-func groupConflictName(name, hash string) string {
+func groupConflictName(name, hash string) (string, error) {
+	if !validHex(hash, sha256.Size) {
+		return "", errors.New("冲突文件的内容摘要无效")
+	}
 	ext := path.Ext(name)
-	return strings.TrimSuffix(name, ext) + ".polysync-conflict-" + hash[:16] + ext
+	return strings.TrimSuffix(name, ext) + ".polysync-conflict-" + hash[:16] + ext, nil
 }
 
 // A path is a causal register. Independent values are joined deterministically,
 // preserving the losing content under the same name on every member.
-func mergeGroup(local, remote model.Revisions) (model.Revisions, []model.PlanConflict, error) {
+func mergeGroup(shareID string, local, remote model.Revisions) (model.Revisions, []model.PlanConflict, error) {
 	target := maps.Clone(local)
 	if target == nil {
 		target = make(model.Revisions)
@@ -180,6 +277,7 @@ func mergeGroup(local, remote model.Revisions) (model.Revisions, []model.PlanCon
 		case ab:
 			continue
 		case ba:
+			b.Forks = inheritForks(a, b)
 			target[name] = b
 			continue
 		}
@@ -187,22 +285,34 @@ func mergeGroup(local, remote model.Revisions) (model.Revisions, []model.PlanCon
 		if b.Hash > a.Hash {
 			winner, other = b, a
 		}
+		winningClock := winner.Clock
+		winner.Forks = inheritForks(a, b)
 		winner.Clock = joinClock(a.Clock, b.Clock)
 		target[name] = winner
 		if a.Hash == b.Hash {
 			continue
 		}
-		event, err := groupFork(name, a, b)
+		fork := model.GroupFork{{Hash: other.Hash, Clock: other.Clock}, {Hash: winner.Hash, Clock: winningClock}}
+		event, err := forkID(name, fork)
 		if err != nil {
 			return nil, nil, err
 		}
+		if winner.Forks == nil {
+			winner.Forks = make(map[string]model.GroupFork)
+		}
+		winner.Forks[conflictID(shareID, event)] = fork
+		target[name] = winner
 		detail := model.PlanConflict{GroupEvent: event, Path: name, ServerHash: a.Hash, ClientHash: b.Hash, ServerExists: a.Hash != "", ClientExists: b.Hash != "", Kind: "modify-delete"}
 		if a.Parent != nil && b.Parent != nil && a.Parent.Hash == b.Parent.Hash && maps.Equal(a.Parent.Clock, b.Parent.Clock) {
 			detail.BaseHash = a.Parent.Hash
 		}
 		if other.Hash != "" {
 			detail.Kind = "modify-modify"
-			detail.ConflictCopyPath = groupConflictName(name, other.Hash)
+			detail.ConflictCopyPath, err = groupConflictName(name, other.Hash)
+			if err != nil {
+				return nil, nil, err
+			}
+			other.Forks = nil // A new path has its own causal history.
 			other.ConflictOrigin = event
 			extra[name] = other
 		}
@@ -240,8 +350,7 @@ func revisionPaths(records model.Revisions) []string { return slices.Sorted(maps
 
 func (s *Service) saveGroupConflicts(share model.Share, conflicts []model.PlanConflict, self, peer model.PairedDevice) error {
 	for _, c := range conflicts {
-		h := sha256.Sum256([]byte(share.ID + "\x00" + c.GroupEvent))
-		id := hex.EncodeToString(h[:16])
+		id := conflictID(share.ID, c.GroupEvent)
 		if _, ok, err := s.store.Conflict(id); err != nil {
 			return err
 		} else if ok {

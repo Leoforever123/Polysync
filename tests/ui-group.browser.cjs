@@ -129,8 +129,28 @@ async function checkGroup() {
     await follower.waitFor({state:"detached"});
     assert.equal(await a.page.locator(".member-row").count(), 1);
     assert.equal(await fs.readFile(path.join(c.folder,"example.txt"),"utf8"), "same folder on all three");
+    await a.page.keyboard.press("Escape");
+    const retained = "saved on A while B deleted its copy";
+    await fs.writeFile(path.join(a.folder, "example.txt"), retained);
+    await fs.unlink(path.join(b.folder, "example.txt"));
+    await a.page.locator(".sync-button").click();
+    const aConflict = a.page.locator(".conflict-row").filter({hasText: "example.txt"});
+    const bConflict = b.page.locator(".conflict-row").filter({hasText: "example.txt"});
+    await bConflict.waitFor();
+    await aConflict.locator(".resolve-conflict").click();
+    await Promise.all([
+      a.page.waitForEvent("dialog").then(async dialog => {
+        assert.match(dialog.message(), /替换冲突文件/);
+        await dialog.accept();
+      }),
+      a.page.locator('.resolve-choice[data-choice="local"]').click(),
+    ]);
+    await aConflict.waitFor({state: "detached"});
+    await b.page.locator(".sync-button").click();
+    await bConflict.waitFor({state: "detached"});
+    assert.equal(await fs.readFile(path.join(b.folder, "example.txt"), "utf8"), retained);
     assert.deepEqual(errors, []);
-    console.log("Three loopback instances paired through the UI, joined one folder as collaborator and receive-only follower, and received identical bytes; local-only edits required a fresh preview and consent before write-back; disconnect retained the other member and all files.");
+    console.log("Three loopback instances paired through the UI, joined one folder as collaborator and receive-only follower, and received identical bytes; local-only edits required a fresh preview and consent before write-back; disconnect retained the other member and all files. A modify/delete conflict was resolved on one collaborator and acknowledged by the other.");
   } finally {
     if (browser) await browser.close();
     await Promise.all(processes.map(async child => {
