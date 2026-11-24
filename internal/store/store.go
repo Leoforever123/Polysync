@@ -100,6 +100,7 @@ func (s *Store) Share(id string) (model.Share, bool) {
 	defer s.mu.RUnlock()
 	for _, share := range s.config.Shares {
 		if share.ID == id {
+			share.Members = append([]model.ShareMember(nil), share.Members...)
 			return share, true
 		}
 	}
@@ -115,7 +116,11 @@ func (s *Store) AddShare(share model.Share) error {
 		}
 	}
 	s.config.Shares = append(s.config.Shares, share)
-	return s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		s.config.Shares = s.config.Shares[:len(s.config.Shares)-1]
+		return err
+	}
+	return nil
 }
 
 func (s *Store) UpdateShare(share model.Share) error {
@@ -123,8 +128,13 @@ func (s *Store) UpdateShare(share model.Share) error {
 	defer s.mu.Unlock()
 	for i := range s.config.Shares {
 		if s.config.Shares[i].ID == share.ID {
+			old := s.config.Shares[i]
 			s.config.Shares[i] = share
-			return s.saveLocked()
+			if err := s.saveLocked(); err != nil {
+				s.config.Shares[i] = old
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("share %q not found", share.ID)
@@ -219,7 +229,23 @@ func (s *Store) RemovePairedDevice(id string) error {
 			previous := cloneConfig(s.config)
 			s.config.PairedDevices = append(s.config.PairedDevices[:i], s.config.PairedDevices[i+1:]...)
 			for j := range s.config.Shares {
-				if s.config.Shares[j].PeerDeviceID == id {
+				if s.config.Shares[j].LocalRole != "" {
+					space := &s.config.Shares[j]
+					kept := space.Members[:0]
+					for _, m := range space.Members {
+						if m.DeviceID != id {
+							kept = append(kept, m)
+						}
+					}
+					space.Members = kept
+					if len(kept) == 0 {
+						space.State = "unpaired"
+						space.AutoSync = false
+					} else if space.PeerDeviceID == id {
+						space.PeerDeviceID = kept[0].DeviceID
+						space.PeerAddress = kept[0].Address
+					}
+				} else if s.config.Shares[j].PeerDeviceID == id {
 					s.config.Shares[j].State = "unpaired"
 					s.config.Shares[j].AutoSync = false
 				}
@@ -468,6 +494,9 @@ func safeName(value string) string {
 func cloneConfig(config model.Config) model.Config {
 	copyConfig := config
 	copyConfig.Shares = append([]model.Share(nil), config.Shares...)
+	for i := range copyConfig.Shares {
+		copyConfig.Shares[i].Members = append([]model.ShareMember(nil), copyConfig.Shares[i].Members...)
+	}
 	copyConfig.PairedDevices = append([]model.PairedDevice(nil), config.PairedDevices...)
 	copyConfig.ShareInvitations = append([]model.ShareInvitation(nil), config.ShareInvitations...)
 	for i := range copyConfig.PairedDevices {

@@ -33,12 +33,16 @@ class CoreDeviceTest : ForegroundDeviceTest() {
             val receipt = JSONObject(b.request("GET", "/api/transfers", "")).getJSONArray("tasks").getJSONObject(0)
             assertTrue(payload.contentEquals(File(b.exportPath(receipt.getString("id"), 0)).readBytes()))
             assertEquals(id, JSONObject(a.request("GET", "/api/transfers", "")).getJSONArray("tasks").getJSONObject(0).getString("id"))
-            val share = JSONObject(a.createWorkspace("测试工作区", peer, "")).getString("id")
+            val share = JSONObject(a.createWorkspaceWithRole("测试工作区", peer, "", "follower", false)).getString("id")
             a.importToWorkspace(share, "payload", "文件.bin")
             val invitation = JSONObject(b.request("GET", "/api/status", "")).getJSONArray("shareInvitations").getJSONObject(0).getString("id")
             b.createWorkspace("测试工作区", "", invitation)
             waitUntil { JSONArray(b.workspaceFiles(share)).length() > 0 }
             assertTrue(payload.contentEquals(File(b.workspaceExportPath(share, "文件.bin")).readBytes()))
+            val info = JSONObject(b.request("GET","/api/status","")).getJSONArray("shares").getJSONObject(0)
+            assertEquals("follower", info.getString("localRole"))
+            File(right,"imports/local-only").writeText("keep local")
+            try { b.importToWorkspace(share,"local-only","新增.txt"); fail("Read-only folder accepted import") } catch (_: Exception) { }
             try { b.workspaceExportPath(share, "../state/config.json"); fail("Accepted traversal") } catch (_: Exception) { }
             waitUntil { !a.hasActiveWork() && !b.hasActiveWork() }
             a.request("DELETE", "/api/paired-devices/$peer", "")

@@ -1,5 +1,5 @@
 /* Temporary delivery is independent of synchronization folders. */
-const transferUI = { tasks: [], settings: null, files: [], uploading: false, taskID: null, loading: false };
+const transferUI = { tasks: [], settings: null, files: [], uploading: null, visibleCount: 24, cancelRequested: false, taskID: null, loading: null, visibleCount: 24, cancelRequested: false };
 const transferStates = { preparing: "正在准备", connecting: "正在连接", sending: "正在发送", receiving: "正在接收", verifying: "正在确认", complete: "已完成", failed: "失败", cancelled: "已取消", interrupted: "已中断" };
 function transferIsActive(value) { return ["preparing", "connecting", "sending", "receiving", "verifying"].includes(value); }
 function transferBytes(value) {
@@ -17,6 +17,13 @@ function transferSelectionError(files) {
 }
 function setWorkspace(view) {
   const transfer = view === "transfer";
+  const next = $(transfer ? "#transfer-workspace" : "#sync-workspace");
+  if (next.hidden) {
+    const previous = $(transfer ? "#sync-workspace" : "#transfer-workspace");
+    previous.classList.remove("workspace-arrival");
+    next.classList.add("workspace-arrival");
+  }
+  $("#add-share").hidden = transfer;
   $("#sync-workspace").hidden = transfer;
   $("#transfer-workspace").hidden = !transfer;
   document.querySelectorAll("[data-workspace]").forEach(button => button.setAttribute("aria-current", String(button.dataset.workspace === view)));
@@ -27,14 +34,21 @@ function renderTransferDevices() {
   const peers = state.data?.pairedDevices || [];
   const html = '<option value="">选择接收设备</option>' + peers.map(peer => `<option value="${escapeHTML(peer.id)}" ${peer.online ? "" : "disabled"}>${escapeHTML(peer.name)} · ${peer.online ? "在线" : "离线"}</option>`).join("");
   if (select._options !== html && document.activeElement !== select) {
-    select.innerHTML = html; select._options = html; select.value = selected;
+    select.innerHTML = html;
+    select._options = html;
+    const online = peers.filter(peer => peer.online);
+    if (online.some(peer => peer.id === selected)) select.value = selected;
+    else if (!selected && online.length === 1) select.value = online[0].id;
+    else select.value = "";
   }
   $("#transfer-peer-note").textContent = peers.length ? "已配对设备会自动接收。对方关闭接收或离线时，发送会失败。" : "先在「添加设备」中配对，两台设备需运行支持随传的版本。";
   updateTransferSelection();
 }
 function updateTransferSelection() {
   setContent("#transfer-selection", transferUI.files.length ? transferUI.files.map((file, i) => `<li><span>${escapeHTML(file.name)}</span><small>${transferBytes(file.size)}</small><button type="button" class="icon-button" data-remove-file="${i}" aria-label="移除 ${escapeHTML(file.name)}" ${transferUI.uploading ? "disabled" : ""}>×</button></li>`).join("") : "");
-  $("#transfer-send").disabled = transferUI.uploading || !transferUI.files.length || !$("#transfer-peer").value;
+  const recipient = state.data?.pairedDevices?.find(device => device.id === $("#transfer-peer").value);
+  $("#transfer-send").disabled = transferUI.uploading || !transferUI.files.length || !recipient?.online;
+  $("#transfer-send").textContent = transferUI.uploading ? "正在发送…" : "发送文件 ↗";
   $("#transfer-files").disabled = transferUI.uploading;
   $("#transfer-peer").disabled = transferUI.uploading;
   $("#transfer-upload-cancel").hidden = !transferUI.uploading;
@@ -48,11 +62,10 @@ function chooseTransferFiles(files) {
 }
 function transferCard(task) {
   const active = transferIsActive(task.state);
-  const percent = task.total ? Math.min(100, Math.round(task.done / task.total * 100)) : (task.state === "complete" ? 100 : 0);
   return `<article class="transfer-task" id="transfer-task-${escapeHTML(task.id)}" data-transfer-id="${escapeHTML(task.id)}" tabindex="-1">
     <div class="transfer-task-head"><div><span class="eyebrow">${task.direction === "receive" ? "来自" : "发往"} ${escapeHTML(task.peerName)}</span><h3>${task.files.length === 1 ? escapeHTML(task.files[0].name) : task.files.length + " 个文件"}</h3></div><span class="transfer-badge ${task.state === "failed" ? "error" : ""}">${transferStates[task.state] || "未知状态"}</span></div>
     <p class="muted">${escapeHTML(formatTime(task.created))} · ${transferBytes(task.total)}</p>
-    ${active ? `<progress aria-label="传输进度" value="${percent}" max="100"></progress><p class="muted">${transferStates[task.state]} · ${percent}%</p>` : ""}
+    ${active ? `<progress aria-label="传输进度" value="0" max="100"></progress><p class="muted">${transferStates[task.state]} · <span data-percent>0%</span></p>` : ""}
     ${task.message && task.state !== "complete" ? `<p class="transfer-message">${escapeHTML(task.message)}</p>` : ""}
     <ul class="received-files">${task.files.map((file, index) => `<li><div><strong>${escapeHTML(file.name)}</strong><small>${transferBytes(file.size)}${file.state === "missing" ? " · 暂存文件已不存在" : file.state === "complete" ? " · 已校验" : ""}</small></div>${task.direction === "receive" ? `<div class="transfer-file-actions"><button class="button small" data-transfer-action="save" data-index="${index}" ${file.state === "complete" ? "" : "disabled"}>另存为</button><button class="button ghost small" data-transfer-action="open" data-index="${index}" ${file.state === "complete" ? "" : "disabled"}>打开位置</button></div>` : ""}</li>`).join("")}</ul>
     <div class="transfer-task-foot"><span class="transfer-path" title="${escapeHTML(task.storageDir)}">${escapeHTML(task.storageDir)}</span><div>${active ? '<button class="button ghost small" data-transfer-action="cancel">取消传输</button>' : `${task.direction === "send" ? '<button class="button ghost small" data-transfer-action="retry">重新发送</button>' : ""}<button class="button ghost small" data-transfer-action="remove">移除记录</button>`}</div></div>
@@ -61,14 +74,20 @@ function transferCard(task) {
 function renderTransferTasks() {
   const list = $("#transfer-list");
   // Update cards separately and keep the focused card intact across polling.
-  const ids = new Set(transferUI.tasks.map(task => task.id));
+  const visible = transferUI.tasks.slice(0, transferUI.visibleCount);
+  if (transferUI.linkedTask) {
+    const pinned = transferUI.tasks.find(task => task.id === transferUI.linkedTask);
+    if (pinned && !visible.some(task => task.id === pinned.id)) visible.push(pinned);
+  }
+  const ids = new Set(visible.map(task => task.id));
+  $("#transfer-more").hidden = transferUI.tasks.length <= transferUI.visibleCount;
   list.querySelectorAll("[data-transfer-id]").forEach(node => { if (!ids.has(node.dataset.transferId) && !node.contains(document.activeElement)) node.remove(); });
   if (!transferUI.tasks.length) {
     if (!list.querySelector(".transfer-empty")) list.innerHTML = '<div class="transfer-empty"><div class="transfer-orbit" aria-hidden="true">↘</div><h3>文件到了，就在这里。</h3><p>接收的文件会自动暂存，你可以随时另存到需要的位置。</p></div>';
     return;
   }
   list.querySelector(".transfer-empty")?.remove();
-  transferUI.tasks.forEach((task, i) => {
+  visible.forEach((task, i) => {
     let node = document.getElementById("transfer-task-" + task.id);
     const html = transferCard(task);
     if (!node) {
@@ -77,13 +96,21 @@ function renderTransferTasks() {
       list.insertBefore(node, list.children[i] || null);
     } else if (node._html !== html && !node.contains(document.activeElement)) {
       const template = document.createElement("template"); template.innerHTML = html;
-      const replacement = template.content.firstElementChild; replacement._html = html; node.replaceWith(replacement);
+      const replacement = template.content.firstElementChild; replacement._html = html; node.replaceWith(replacement); node = replacement;
+    }
+    const bar = node.querySelector("progress");
+    const amount = task.total ? Math.min(100, Math.round(task.done / task.total * 100)) : 0;
+    if (bar && bar.value !== amount) {
+      bar.value = amount;
+      node.querySelector("[data-percent]").textContent = amount + "%";
     }
   });
 }
-async function refreshTransfers() {
-  if (transferUI.loading) return;
-  transferUI.loading = true;
+function refreshTransfers() {
+  if (!transferUI.loading) transferUI.loading = loadTransfers().finally(() => { transferUI.loading = null; });
+  return transferUI.loading;
+}
+async function loadTransfers() {
   try {
     const data = await api("/api/transfers");
     transferUI.tasks = data.tasks || []; transferUI.settings = data.settings;
@@ -94,7 +121,7 @@ async function refreshTransfers() {
   } catch (error) {
     $("#transfer-connection-error").hidden = false;
     $("#transfer-connection-error").textContent = "无法读取随传状态：" + error.message;
-  } finally { transferUI.loading = false; }
+  }
 }
 function uploadTransfer(id, files) {
   return new Promise((resolve, reject) => {
@@ -114,13 +141,18 @@ function uploadTransfer(id, files) {
 async function sendTransfer() {
   if (transferUI.uploading) return;
   const error = transferSelectionError(transferUI.files);
-  if (error || !$("#transfer-peer").value) return toast(error || "请选择在线设备", true);
+  if (error || !state.data?.pairedDevices?.some(device => device.id === $("#transfer-peer").value && device.online)) return toast(error || "请选择在线设备", true);
   const files = [...transferUI.files];
-  transferUI.uploading = true; updateTransferSelection();
+  transferUI.cancelRequested = false; transferUI.uploading = true; updateTransferSelection();
   $("#transfer-upload-note").textContent = "正在创建任务…";
   try {
     const task = await api("/api/transfers", { method: "POST", body: JSON.stringify({ peerId: $("#transfer-peer").value, files: files.map(file => ({ name: file.name, size: file.size })) }) });
     transferUI.taskID = task.id;
+    if (transferUI.cancelRequested) {
+      await api("/api/transfers/" + encodeURIComponent(task.id) + "/cancel", { method: "POST", body: "{}" });
+      $("#transfer-upload-note").textContent = "上传已取消";
+      return;
+    }
     await uploadTransfer(task.id, files);
     transferUI.files = []; $("#transfer-files").value = "";
     $("#transfer-upload-note").textContent = "已交给后台，现在可以关闭页面。";
@@ -131,20 +163,28 @@ async function sendTransfer() {
 function showTransferSettings() {
   const settings = transferUI.settings;
   if (!settings) return toast("随传设置尚未加载，请稍后重试", true);
-  openModal(`<h2 id="modal-title">随传设置</h2><p class="modal-intro">让临时文件，有自己的落脚处。</p><form id="transfer-settings-form"><label class="check-row"><input id="transfer-auto" type="checkbox" ${settings.autoReceive ? "checked" : ""}> 自动接收已配对设备的文件</label><p class="muted">关闭后拒绝新传输；已经开始的任务继续进行。</p><div class="field"><label for="transfer-directory">接收暂存位置</label><div class="path-input"><input class="input" id="transfer-directory" required value="${escapeHTML(settings.directory)}"><button type="button" class="button ghost" id="transfer-browse">浏览</button></div><small>新位置只用于之后的接收。已有文件留在原处，不会自动移动或清理。暂存位置不能与同步文件夹重叠。</small></div><div class="modal-actions"><button type="button" class="button ghost" data-close>取消</button><button type="submit" class="button primary">保存设置</button></div></form>`, "transfer-settings");
+  openModal(`<h2 id="modal-title">随传设置</h2><p class="modal-intro">管理已配对设备的接收权限和文件保存位置。</p><form id="transfer-settings-form"><label class="check-row"><input id="transfer-auto" type="checkbox" ${settings.autoReceive ? "checked" : ""}> 自动接收已配对设备的文件</label><p class="muted">关闭后拒绝新传输；已经开始的任务继续进行。</p><div class="field"><label for="transfer-directory">接收暂存位置</label><div class="path-input"><input class="input" id="transfer-directory" required value="${escapeHTML(settings.directory)}"><button type="button" class="button ghost" id="transfer-browse">浏览</button></div><small>新位置只用于之后的接收。已有文件留在原处，不会自动移动或清理。暂存位置不能与同步文件夹重叠。</small></div><div class="modal-actions"><button type="button" class="button ghost" data-close>取消</button><button type="submit" class="button primary">保存设置</button></div></form>`, "transfer-settings");
 }
 function showTransferRemoval(task) {
   openModal(`<h2 id="modal-title">移除这条记录？</h2><p class="modal-intro">默认保留暂存文件。记录移除后，可通过下面的路径找到原件。</p><p class="transfer-message">${escapeHTML(task.storageDir)}</p><form id="transfer-remove-form" data-task="${escapeHTML(task.id)}"><label class="check-row"><input type="checkbox" id="transfer-delete-files"> 同时删除本任务的暂存文件（无法撤销）</label><p class="muted">另存到其他位置的副本不受影响。</p><div class="modal-actions"><button type="button" class="button ghost" data-close>取消</button><button type="submit" class="button danger">移除记录</button></div></form>`, "transfer-remove");
 }
 async function routeWorkspace() {
   const hash = location.hash;
+  transferUI.linkedTask = null;
   setWorkspace(hash.startsWith("#transfer") ? "transfer" : "sync");
   if (hash.startsWith("#transfer")) {
+    renderTransferDevices();
     await refreshTransfers();
+    if (location.hash !== hash) return;
     if (hash === "#transfer/send") $("#transfer-files").focus();
     if (hash === "#transfer/settings") showTransferSettings();
     if (hash.startsWith("#transfer/task/")) {
       const id = hash.slice("#transfer/task/".length);
+      const index = transferUI.tasks.findIndex(task => task.id === id);
+      if (index >= transferUI.visibleCount) {
+        transferUI.linkedTask = id;
+        renderTransferTasks();
+      }
       const node = document.getElementById("transfer-task-" + id);
       if (node) { node.scrollIntoView({ block: "center" }); node.focus(); }
       else toast("记录已移除或暂不可用", true);
@@ -158,11 +198,20 @@ if (typeof document !== "undefined") {
     const button = event.target.closest("button");
     if (!button) return;
     if (button.dataset.workspace) { location.hash = button.dataset.workspace === "transfer" ? "transfer" : "sync"; setWorkspace(button.dataset.workspace); return; }
+    if (button.id === "transfer-more") {
+      const firstNew = transferUI.tasks[transferUI.visibleCount];
+      transferUI.visibleCount += 24;
+      renderTransferTasks();
+      if (firstNew) document.getElementById("transfer-task-" + firstNew.id)?.focus();
+      return;
+    }
     if (button.id === "transfer-settings") return showTransferSettings();
     if (button.id === "transfer-send") return sendTransfer();
     if (button.dataset.removeFile !== undefined) { transferUI.files.splice(Number(button.dataset.removeFile), 1); updateTransferSelection(); return; }
     if (button.id === "transfer-upload-cancel") {
-      if (!transferUI.taskID) return toast("任务正在创建，请稍候");
+      transferUI.cancelRequested = true;
+      $("#transfer-upload-note").textContent = "正在取消上传…";
+      if (!transferUI.taskID) return;
       transferUI.xhr?.abort();
       try { await api("/api/transfers/" + encodeURIComponent(transferUI.taskID) + "/cancel", { method: "POST", body: "{}" }); } catch (error) { toast(error.message, true); }
       return;
@@ -209,6 +258,8 @@ if (typeof document !== "undefined") {
   });
   window.addEventListener("hashchange", routeWorkspace);
   window.addEventListener("beforeunload", event => { if (transferUI.uploading) { event.preventDefault(); event.returnValue = ""; } });
-  renderTransferDevices(); refreshTransfers(); routeWorkspace();
-  setInterval(() => { renderTransferDevices(); refreshTransfers(); }, 2500);
+  routeWorkspace();
+  const poll = () => { if (!document.hidden && !$("#transfer-workspace").hidden) refreshTransfers(); };
+  setInterval(poll, 2500);
+  document.addEventListener("visibilitychange", poll);
 }

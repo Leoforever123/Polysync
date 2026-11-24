@@ -35,7 +35,27 @@ func Scan(ctx context.Context, root string) ([]model.Entry, error) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if path == root || item.IsDir() {
+		if path == root {
+			return nil
+		}
+		if item.IsDir() && strings.HasPrefix(item.Name(), commitDirPrefix) {
+			originalDir := filepath.Join(path, originalDirName)
+			info, err := os.Lstat(originalDir)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			if err == nil && info.IsDir() {
+				files, err := os.ReadDir(originalDir)
+				if err != nil {
+					return err
+				}
+				if len(files) > 0 {
+					return fmt.Errorf("同步提交中断，请检查并恢复此目录中的原文件后再同步：%s", originalDir)
+				}
+				return filepath.SkipDir
+			}
+		}
+		if item.IsDir() {
 			return nil
 		}
 		if isInternalTemporary(item.Name()) {

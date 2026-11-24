@@ -4,9 +4,11 @@ package tray
 
 import (
 	"fmt"
-	"golang.org/x/sys/windows"
 	"runtime"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 func enablePerMonitorDPI() (func(), error) {
@@ -61,7 +63,41 @@ type menuVisualItem struct {
 	text                                       string
 	section, separator, submenu, danger, brand bool
 }
+
+// Colors use the Windows COLORREF byte order.
+type menuPalette struct {
+	background, separator, selection, text, caption, disabled, danger uintptr
+}
+
+func paletteForMenu(dark bool) menuPalette {
+	if dark {
+		return menuPalette{0x1d2519, 0x404c39, 0x2d3925, 0xe9f3ed, 0xb6c2b2, 0x899584, 0x99adff}
+	}
+	return menuPalette{0xf6faf8, 0xdee7e0, 0xe3f0e6, 0x2d3521, 0x5c6754, 0x7c887d, 0x3647a0}
+}
+
+func appUsesDarkColors() bool {
+	key, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`, registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	defer key.Close()
+	light, _, err := key.GetIntegerValue("AppsUseLightTheme")
+	return err == nil && light == 0
+}
+
+func systemHighContrast() bool {
+	var settings struct {
+		Size, Flags uint32
+		Scheme      *uint16
+	}
+	settings.Size = uint32(unsafe.Sizeof(settings))
+	ok, _, _ := user32.NewProc("SystemParametersInfoW").Call(0x42, uintptr(settings.Size), uintptr(unsafe.Pointer(&settings)), 0)
+	return ok != 0 && settings.Flags&1 != 0
+}
+
 type menuStyle struct {
+	palette                            menuPalette
 	dpi                                uint32
 	regular, caption, bold, background uintptr
 	items                              map[uintptr]menuVisualItem
@@ -70,7 +106,7 @@ type menuStyle struct {
 var gdi32 = windows.NewLazySystemDLL("gdi32.dll")
 
 func newMenuStyle(dpi uint32) (*menuStyle, error) {
-	s := &menuStyle{dpi: dpi, items: make(map[uintptr]menuVisualItem)}
+	s := &menuStyle{palette: paletteForMenu(appUsesDarkColors()), dpi: dpi, items: make(map[uintptr]menuVisualItem)}
 	font := func(size int32, weight uintptr) uintptr {
 		name := utf16("Microsoft YaHei UI")
 		h, _, _ := gdi32.NewProc("CreateFontW").Call(uintptr(-scaleMenu(size, dpi)), 0, 0, 0, weight, 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(name)))
@@ -80,7 +116,7 @@ func newMenuStyle(dpi uint32) (*menuStyle, error) {
 	s.regular = font(13, 400)
 	s.caption = font(11, 400)
 	s.bold = font(14, 600)
-	s.background, _, _ = gdi32.NewProc("CreateSolidBrush").Call(0xf6faf8)
+	s.background, _, _ = gdi32.NewProc("CreateSolidBrush").Call(s.palette.background)
 	if s.regular == 0 || s.caption == 0 || s.bold == 0 || s.background == 0 {
 		s.close()
 		return nil, fmt.Errorf("create menu fonts or brush")
@@ -167,14 +203,14 @@ func (s *menuStyle) draw(d *drawItem, icon uintptr) bool {
 	saved, _, _ := gdi32.NewProc("SaveDC").Call(d.DC)
 	defer gdi32.NewProc("RestoreDC").Call(d.DC, saved)
 	px := func(v int32) int32 { return scaleMenu(v, s.dpi) }
-	fill(d.DC, d.Rect, 0xf6faf8, 0)
+	fill(d.DC, d.Rect, s.palette.background, 0)
 	r := d.Rect
 	if item.separator {
 		r.Left += px(16)
 		r.Right -= px(16)
 		r.Top = (r.Top + r.Bottom) / 2
 		r.Bottom = r.Top + px(1)
-		fill(d.DC, r, 0xdee7e0, 0)
+		fill(d.DC, r, s.palette.separator, 0)
 		return true
 	}
 	selected := d.State&1 != 0 && d.State&(2|4) == 0
@@ -183,19 +219,19 @@ func (s *menuStyle) draw(d *drawItem, icon uintptr) bool {
 		r.Right -= px(5)
 		r.Top += px(2)
 		r.Bottom -= px(2)
-		fill(d.DC, r, 0xe3f0e6, px(12))
+		fill(d.DC, r, s.palette.selection, px(12))
 	}
-	color := uintptr(0x2d3521)
+	color := s.palette.text
 	font := s.regular
 	if item.section {
-		color = 0x5c6754
+		color = s.palette.caption
 		font = s.caption
 	}
 	if d.State&(2|4) != 0 && !item.section {
-		color = 0x7c887d
+		color = s.palette.disabled
 	}
 	if item.danger && d.State&(2|4) == 0 {
-		color = 0x3647a0
+		color = s.palette.danger
 	}
 	if item.brand {
 		font = s.bold

@@ -12,6 +12,8 @@ function showUpdateState(s) {
   $("#update-platform").hidden = s.supported;
   const buttons = updateButtonState(s);
   for (const action of ["check", "download", "install"]) $("#update-" + action).disabled = !buttons[action];
+  $("#update-download").hidden = !buttons.download && s.phase !== "downloading";
+  $("#update-install").hidden = !buttons.install && s.phase !== "installing";
   $("#update-progress").hidden = s.phase !== "downloading";
   $("#update-progress").max = s.total || 1;
   $("#update-progress").value = s.downloaded || 0;
@@ -33,7 +35,7 @@ function openUpdates() {
   clearTimeout(updateUI.timer);
   const generation = ++updateUI.generation;
   updateUI.token = "";
-  openModal(`<h2 id="modal-title">版本与更新</h2><p class="modal-intro">当前版本 <strong id="update-current">正在读取…</strong></p><p id="update-latest"></p><p id="update-message" role="status">正在读取更新状态…</p><progress id="update-progress" aria-label="安装包下载进度" hidden></progress><p class="muted" id="update-platform" hidden>当前系统暂不支持应用内安装，请从官网下载对应版本。</p><p class="muted">下载完成后可安装并重启。正在同步或传输时，请完成任务后再安装。</p><div class="modal-actions"><button class="button ghost" id="update-check" disabled>检查更新</button><button class="button ghost" id="update-download" disabled>下载安装包</button><button class="button primary" id="update-install" disabled>安装并重启</button></div>`, "update");
+  openModal(`<h2 id="modal-title">版本与更新</h2><p class="modal-intro">当前版本 <strong id="update-current">正在读取…</strong></p><p id="update-latest"></p><p id="update-message" role="status">正在读取更新状态…</p><progress id="update-progress" aria-label="安装包下载进度" hidden></progress><p class="muted" id="update-platform" hidden>当前系统暂不支持应用内安装，请从官网下载对应版本。</p><p class="muted">下载完成后可安装并重启。正在同步或传输时，请完成任务后再安装。</p><div class="modal-actions"><button class="button ghost" id="update-check" disabled>检查更新</button><button class="button ghost" id="update-download" hidden disabled>下载安装包</button><button class="button primary" id="update-install" hidden disabled>安装并重启</button></div>`, "update");
   refreshUpdate(generation);
 }
 if (typeof document !== "undefined") {

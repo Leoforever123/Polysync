@@ -1,0 +1,12 @@
+<resources>
+    <style name="Theme.PolySync" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">@color/ps_accent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:statusBarColor">@color/ps_paper</item>
+        <item name="android:navigationBarColor">@color/ps_surface</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">@color/ps_paper</item>
+    </style>
+</resources>

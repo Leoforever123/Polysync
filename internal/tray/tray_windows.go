@@ -501,16 +501,19 @@ func (t *nativeTray) showMenu() error {
 	if ok, _, e := cursorPos.Call(uintptr(unsafe.Pointer(&p))); ok == 0 {
 		return e
 	}
-	style, err := newMenuStyle(t.menuDPI(p))
-	if err != nil {
-		return err
+	// Native menus honor user-selected contrast colors and Windows menu motion.
+	if !systemHighContrast() {
+		style, err := newMenuStyle(t.menuDPI(p))
+		if err != nil {
+			return err
+		}
+		defer style.close()
+		if err := style.decorate(menu); err != nil {
+			return err
+		}
+		t.menuStyle = style
+		defer func() { t.menuStyle = nil }()
 	}
-	defer style.close()
-	if err := style.decorate(menu); err != nil {
-		return err
-	}
-	t.menuStyle = style
-	defer func() { t.menuStyle = nil }()
 	foreground.Call(t.window)
 	// TPM_RETURNCMD | TPM_RIGHTBUTTON: nested actions also accept right clicks.
 	command, _, _ := trackMenu.Call(menu, 0x100|0x2, uintptr(p.X), uintptr(p.Y), 0, t.window, 0)

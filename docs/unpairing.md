@@ -2,7 +2,7 @@
 
 ## 使用方式
 
-- 电脑端：在“设备”的已配对卡片点击“取消配对”，阅读说明后确认。
+- 电脑端有已配对设备时，“同步”和“随传”页面顶部都会显示“管理设备”。点击它，找到对应设备卡片上的“取消配对”，阅读说明后确认。离线设备也可操作。“同步”页面下方的设备卡片提供同一入口。尚未配对时，顶部显示“添加设备”。
 - Android：在“设备 → 我的设备”点击“取消配对”。本机服务需处于开启状态，对方不需要在线。
 - 点击“保留配对”、关闭弹窗或电脑端按 Escape，不会修改配对。
 
@@ -54,6 +54,8 @@ node --check internal/webui/static/app.js
 $env:NODE_PATH = Join-Path $PWD '.cache/ui-tools/node_modules'
 node tests/unpair.ui.browser.cjs
 ```
+
+使用 Playwright 自带 Chromium 时，可设置环境变量 `POLYSYNC_TEST_BROWSER_CHANNEL=chromium` 后运行同一浏览器测试。用例覆盖“随传 → 管理设备 → 取消配对”，包括离线设备、取消后回到原设备卡片、关闭设备列表后回到顶栏，以及任务忙碌时在原确认框按 Enter 重试。
 
 Android 使用 `scripts/build-android.sh`，构建环境见 [Android 调试说明](android-debug.md)。本次通过 `.cache/unpair-validation/build-android.sh` 的 LF 副本运行同一构建步骤。连接并授权手机后，可运行 `scripts/install-android.ps1 -Test`；它会安装调试 APK 并运行五项 instrumentation 测试，不能仅以构建成功代替执行。
 

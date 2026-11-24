@@ -31,6 +31,8 @@ type shareRequest struct {
 }
 
 type shareView struct {
+	LocalRole       string              `json:"localRole,omitempty"`
+	Members         []model.ShareMember `json:"members,omitempty"`
 	ID              string              `json:"id"`
 	Name            string              `json:"name"`
 	Path            string              `json:"path"`
@@ -61,6 +63,11 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/pair/requests/{id}", s.handleRejectPairing)
 	mux.HandleFunc("DELETE /api/paired-devices/{id}", s.handleUnpairDevice)
 	mux.HandleFunc("POST /api/shares/invite", s.handleInviteShare)
+	mux.HandleFunc("POST /api/shares/{id}/members", s.handleAddGroupMember)
+	mux.HandleFunc("DELETE /api/shares/{id}/members/{device}", s.handleGroupMemberChange)
+	mux.HandleFunc("PUT /api/shares/{id}/members/{device}", s.handleGroupMemberChange)
+	mux.HandleFunc("GET /api/shares/{id}/writeback-preview", s.handleWriteBack)
+	mux.HandleFunc("POST /api/shares/{id}/writeback-confirm", s.handleWriteBack)
 	mux.HandleFunc("POST /api/share-invitations/{id}/accept", s.handleAcceptInvitation)
 	mux.HandleFunc("GET /api/conflicts/{id}", s.handleConflictContent)
 	mux.HandleFunc("POST /api/conflicts/{id}/resolve", s.handleResolveConflict)
@@ -99,7 +106,7 @@ func (s *Service) handleStatus(writer http.ResponseWriter, _ *http.Request) {
 		shares = append(shares, shareView{
 			ID: share.ID, Name: share.Name, Path: share.Path, PeerAddress: share.PeerAddress,
 			AutoSync: share.AutoSync, IntervalSeconds: share.IntervalSeconds,
-			PairCode: encodePairCode(share), Status: statuses[share.ID], PeerDeviceID: share.PeerDeviceID, State: share.State,
+			LocalRole: share.LocalRole, Members: share.Members, PairCode: encodePairCode(share), Status: statuses[share.ID], PeerDeviceID: share.PeerDeviceID, State: share.State,
 		})
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
@@ -161,6 +168,8 @@ func (s *Service) handleRejectPairing(writer http.ResponseWriter, request *http.
 
 func (s *Service) handleInviteShare(writer http.ResponseWriter, request *http.Request) {
 	var input struct {
+		Role            string `json:"role"`
+		AllowWriteBack  bool   `json:"allowWriteBack"`
 		DeviceID        string `json:"deviceId"`
 		Name            string `json:"name"`
 		Path            string `json:"path"`
@@ -180,6 +189,15 @@ func (s *Service) handleInviteShare(writer http.ResponseWriter, request *http.Re
 	if name == "" {
 		name = filepath.Base(path)
 	}
+	if input.Role != "" {
+		share, err := s.inviteGroup(request.Context(), model.Share{Name: name, Path: path, AutoSync: input.AutoSync, IntervalSeconds: normalizedInterval(input.IntervalSeconds)}, memberInput{DeviceID: input.DeviceID, Role: input.Role, AllowWriteBack: input.AllowWriteBack}, true)
+		if err != nil {
+			writeJSON(writer, http.StatusConflict, map[string]any{"id": share.ID, "error": err.Error()})
+			return
+		}
+		writeJSON(writer, http.StatusCreated, map[string]any{"id": share.ID})
+		return
+	}
 	share, err := s.InviteShare(request.Context(), input.DeviceID, name, path, input.AutoSync, normalizedInterval(input.IntervalSeconds))
 	if err != nil {
 		writeAPIError(writer, http.StatusBadRequest, err)
@@ -198,7 +216,17 @@ func (s *Service) handleAcceptInvitation(writer http.ResponseWriter, request *ht
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
-	path, err := s.preparePath(input.Path, "")
+	s.mu.RLock()
+	inv := s.shareInvitations[request.PathValue("id")]
+	s.mu.RUnlock()
+	exceptID := ""
+	if inv.Role != "" {
+		exceptID = inv.ShareID
+		if existing, ok := s.store.Share(inv.ShareID); ok {
+			input.Path = existing.Path
+		}
+	}
+	path, err := s.preparePath(input.Path, exceptID)
 	if err != nil {
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return

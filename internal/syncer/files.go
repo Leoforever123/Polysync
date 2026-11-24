@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"polysync/internal/model"
 	"polysync/internal/protocol"
 )
 
@@ -49,15 +50,27 @@ func SendFile(ctx context.Context, framer *protocol.Framer, root string, transfe
 	return framer.CopyFrom(file, transfer.Size)
 }
 
-func ReceiveFile(ctx context.Context, framer *protocol.Framer, root, historyRoot string, expected Transfer) error {
-	var header protocol.FileHeader
+func ReceiveFile(ctx context.Context, framer *protocol.Framer, root, historyRoot string, expected Transfer, scannedHash string) error {
+	var header struct {
+		protocol.FileHeader
+		Message string `json:"message"`
+	}
 	if err := framer.ReadJSON(&header); err != nil {
 		return err
+	}
+	if header.Type == "result" && header.Message != "" {
+		return errors.New(header.Message)
 	}
 	if header.Type != "file" || header.Source != expected.Source || header.Dest != expected.Dest || header.Size != expected.Size || header.Hash != expected.Hash {
 		return errors.New("received file header does not match sync plan")
 	}
-	destination, err := SecureJoin(root, header.Dest)
+	return InstallPlannedContent(ctx, root, historyRoot, model.Entry{Path: header.Dest, Hash: header.Hash, Mode: header.Mode, ModTime: header.ModTime, Size: header.Size}, scannedHash, framer.CopyTo)
+}
+
+// InstallPlannedContent verifies both the incoming bytes and the scanned
+// destination. Folder groups and legacy connections use the same commit path.
+func InstallPlannedContent(ctx context.Context, root, historyRoot string, entry model.Entry, scannedHash string, copyTo func(io.Writer, int64) error) error {
+	destination, err := SecureJoin(root, entry.Path)
 	if err != nil {
 		return err
 	}
@@ -80,7 +93,7 @@ func ReceiveFile(ctx context.Context, framer *protocol.Framer, root, historyRoot
 		tmp.Close()
 		return err
 	}
-	if err := framer.CopyTo(limited, header.Size); err != nil {
+	if err := copyTo(limited, entry.Size); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -91,20 +104,17 @@ func ReceiveFile(ctx context.Context, framer *protocol.Framer, root, historyRoot
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if got := hex.EncodeToString(hash.Sum(nil)); got != header.Hash {
-		return fmt.Errorf("hash mismatch for %s", header.Dest)
+	if got := hex.EncodeToString(hash.Sum(nil)); got != entry.Hash {
+		return fmt.Errorf("hash mismatch for %s", entry.Path)
 	}
-	if err := os.Chmod(tmpPath, os.FileMode(header.Mode)&0o777); err != nil && !errors.Is(err, os.ErrPermission) {
+	if err := os.Chmod(tmpPath, os.FileMode(entry.Mode)&0o777); err != nil && !errors.Is(err, os.ErrPermission) {
 		return err
 	}
-	modTime := time.Unix(0, header.ModTime)
+	modTime := time.Unix(0, entry.ModTime)
 	if err := os.Chtimes(tmpPath, modTime, modTime); err != nil {
 		return err
 	}
-	if err := archiveExisting(destination, header.Dest, historyRoot); err != nil {
-		return err
-	}
-	return replaceFile(tmpPath, destination)
+	return applyPlannedFile(ctx, root, entry.Path, historyRoot, scannedHash, tmpPath)
 }
 
 func DeleteFile(root, relative, historyRoot string) error {
@@ -115,7 +125,7 @@ func DeleteFile(root, relative, historyRoot string) error {
 	if err := rejectSymlinkPath(root, path, true); err != nil {
 		return err
 	}
-	if err := archiveExisting(path, relative, historyRoot); err != nil {
+	if err := archiveExisting(context.Background(), path, relative, historyRoot, ""); err != nil {
 		return err
 	}
 	err = os.Remove(path)
@@ -183,7 +193,7 @@ func WriteResolvedStream(ctx context.Context, root, relative, historyRoot string
 	if err := os.Chmod(tmpPath, mode&0o777); err != nil && !errors.Is(err, os.ErrPermission) {
 		return err
 	}
-	if err := archiveExisting(destination, relative, historyRoot); err != nil {
+	if err := archiveExisting(ctx, destination, relative, historyRoot, ""); err != nil {
 		return err
 	}
 	return replaceFile(tmpPath, destination)
@@ -211,12 +221,15 @@ func replaceFile(source, destination string) error {
 	return nil
 }
 
-func archiveExisting(source, relative, historyRoot string) error {
+func archiveExisting(ctx context.Context, source, relative, historyRoot, scannedHash string) error {
 	if historyRoot == "" {
 		return nil
 	}
 	info, err := os.Lstat(source)
 	if errors.Is(err, os.ErrNotExist) {
+		if scannedHash != "" {
+			return changedTarget(relative)
+		}
 		return nil
 	}
 	if err != nil {
@@ -230,6 +243,8 @@ func archiveExisting(source, relative, historyRoot string) error {
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return err
 	}
+	// Discard empty timestamp directories when a concurrent edit aborts the copy.
+	defer removeEmptyParents(historyRoot, filepath.Dir(destination))
 	input, err := os.Open(source)
 	if err != nil {
 		return err
@@ -239,10 +254,20 @@ func archiveExisting(source, relative, historyRoot string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(output, input); err != nil {
+	var writer io.Writer = output
+	hash := sha256.New()
+	if scannedHash != "" {
+		writer = io.MultiWriter(output, hash)
+	}
+	if _, err := io.Copy(writer, &contextReader{ctx: ctx, reader: input}); err != nil {
 		output.Close()
 		_ = os.Remove(destination)
 		return err
+	}
+	if scannedHash != "" && hex.EncodeToString(hash.Sum(nil)) != scannedHash {
+		output.Close()
+		_ = os.Remove(destination)
+		return changedTarget(relative)
 	}
 	if err := output.Sync(); err != nil {
 		output.Close()

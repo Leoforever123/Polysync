@@ -80,6 +80,9 @@ func (s *Service) AcceptShareInvitation(ctx context.Context, invitationID, path 
 	if !exists {
 		return model.Share{}, errors.New("同步邀请不存在")
 	}
+	if invitation.Role != "" {
+		return s.acceptGroup(ctx, invitation, path, auto, interval)
+	}
 	device, paired := s.store.PairedDevice(invitation.DeviceID)
 	if !paired {
 		return model.Share{}, errors.New("邀请设备不再处于配对状态")
@@ -175,6 +178,26 @@ func (s *Service) handleShareAccept(connection *tls.Conn, framer *protocol.Frame
 	share, exists := s.store.Share(request.ShareID)
 	if !exists || share.PeerDeviceID != hello.DeviceID || share.State != "pending" {
 		_ = writeError(framer, "share", "没有对应的待处理同步空间")
+		return
+	}
+	if share.LocalRole != "" {
+		_, err = s.editGroup(share.ID, func(sh *model.Share, exists bool) error {
+			if exists {
+				for i, m := range sh.Members {
+					if m.Legacy && m.DeviceID == hello.DeviceID && m.InvitationID == request.ID {
+						sh.Members[i].State = "active"
+						sh.State = "active"
+						return nil
+					}
+				}
+			}
+			return errors.New("无此设备的旧版邀请")
+		})
+		if err != nil {
+			_ = writeError(framer, "share", err.Error())
+			return
+		}
+		_ = framer.WriteJSON(protocol.Result{Type: "result", OK: true})
 		return
 	}
 	share.State = "active"

@@ -1,0 +1,10 @@
+<resources>
+    <color name="ps_paper">#F5F7F2</color>
+    <color name="ps_surface">#FFFFFF</color>
+    <color name="ps_ink">#173B2B</color>
+    <color name="ps_muted">#4E6558</color>
+    <color name="ps_accent">#245C41</color>
+    <color name="ps_mint">#E4EFE5</color>
+    <color name="ps_line">#CDDCCD</color>
+    <color name="ps_on_accent">#FFFFFF</color>
+</resources>

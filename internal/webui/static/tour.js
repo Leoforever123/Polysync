@@ -1,8 +1,8 @@
 const tourSteps = [
   { target: "#device-card", title: "这是你的当前设备", text: "设备名称帮助你认出这台电脑。连接地址可用于手动配对，点击「修改名称」可以换个好记的名字。" },
-  { target: "#add-device", title: "先连接另一台设备", text: "点击「添加设备」发现同一局域网中的电脑，也可以输入对方的地址。两台电脑都需要运行 PolySync。" },
+  { target: "#add-device", title: "先连接另一台设备", text: "在这里发现同一局域网中的电脑，或输入对方的地址。配对后，也可以在这里管理设备。" },
   { target: "#device-list", title: "配对一次，之后放心传", text: "首次连接时，在对方允许请求后输入六位验证码。成功后设备会显示「已安全配对」。这里先了解流程，不需要现在完成配对。" },
-  { target: "#add-share", title: "添加要同步的文件夹", text: "配对完成后，点击「添加同步」，选择目标设备和这台电脑上的文件夹，填写显示名称，再点击「发送邀请」。可开启「在线时自动同步」并设置检查间隔。" },
+  { target: "#add-share", title: "添加要同步的文件夹", text: "配对完成后，点击「添加同步」，选好本地文件夹和目标设备，点击「发送邀请」。默认共同编辑，也可以让对方仅接收更新。" },
   { target: "#share-list", title: "在另一台电脑接受邀请", text: "发送后，这里会显示「等待对方接受邀请」。请在另一台电脑的 PolySync 页面点击邀请中的「选择文件夹」，选好对应的本地文件夹，再点击「接受并同步」，开始首次同步。" },
   { target: "#share-list", title: "在这里查看和管理同步", text: "文件夹卡片显示同步进度、上次同步时间或失败原因。可以点击「立即同步」，也可以用「自动」开关控制定时检查。尚未添加文件夹时，这里会显示添加入口。" },
   { target: "#workspace-nav", title: "同步，或只是随手传", text: "「同步」让文件夹持续保持一致；「随传」用于临时发送文件，已配对设备自动接收，在工作台另存即可。" },
@@ -23,7 +23,7 @@ function showTourStep(index) {
   tourState.index = index;
   const step = tourSteps[index];
   $("#tour-title").textContent = step.title;
-  $("#tour-copy").textContent = step.target === "#background-note" && state.data && !state.data.trayEnabled ? "关闭页面后服务仍在运行。当前实例未开启 Windows 托盘，请回到启动程序的终端按 Ctrl+C 退出。上传交给后台后，可以放心关闭页面。" : step.text;
+  $("#tour-copy").textContent = step.target === "#background-note" && state.data && !state.data.trayEnabled ? "关闭页面后服务仍在运行。如果从终端启动，回到终端按 Ctrl+C 退出。上传交给后台后，可以放心关闭页面。" : step.text;
   $("#tour-count").textContent = (index + 1) + " / " + tourSteps.length;
   $("#tour-prev").disabled = index === 0;
   $("#tour-next").textContent = index === tourSteps.length - 1 ? "开始使用" : "下一步";
@@ -38,6 +38,7 @@ function startTour() {
   tourState.pending = false;
   if (tourState.index >= 0) return;
   tourState.returnFocus = document.activeElement;
+  tourState.workspace = $("#transfer-workspace").hidden ? "sync" : "transfer";
   setWorkspace("sync"); $("#tour-invite").hidden = true;
   $("#tour-layer").hidden = false; $(".shell").inert = true;
   showTourStep(0);
@@ -47,6 +48,7 @@ function endTour(status = "skipped") {
   tourState.observer?.disconnect();
   tourState.index = -1; $("#tour-layer").hidden = true; $(".shell").inert = false;
   $("#tour-invite").hidden = true;
+  setWorkspace(tourState.workspace);
   const target = tourState.returnFocus;
   if (target?.isConnected && target.getClientRects().length) target.focus(); else $("#help-tour").focus();
   if (location.hash === "#tour") history.replaceState(null, "", "#sync");

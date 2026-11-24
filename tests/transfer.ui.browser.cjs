@@ -16,7 +16,7 @@ const server = http.createServer((req,res) => {
 (async()=>{
  await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
  const base="http://127.0.0.1:"+server.address().port;
- const browser=await chromium.launch({channel:"chrome",headless:true});
+ const browser=await chromium.launch({channel:process.env.POLYSYNC_TEST_BROWSER_CHANNEL || "chrome",headless:true});
  fs.mkdirSync(output,{recursive:true});
  try {
   // A child runner cannot use this same Node server synchronously; launch asynchronously.
@@ -136,6 +136,56 @@ const server = http.createServer((req,res) => {
   await page.locator('#update-install').click();await page.getByText('正在重启',{exact:true}).waitFor();
   await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>document.activeElement.id),'open-update');
   const readsAfterClose=updateReads;await page.waitForTimeout(1900);assert.equal(updateReads,readsAfterClose);
+  const longPage = await browser.newPage({viewport:{width:1024,height:780}, colorScheme:"dark"});
+  longPage.on("pageerror", error => errors.push(error.message));
+  const item = {peerId:"peer", peerName:"工作电脑", direction:"send", created:"2026-09-08T10:00:00Z",
+    total:1000, done:1000, state:"complete", storageDir:"/tmp/polysync", files:[{name:"报告.txt", size:1000,state:"complete"}]};
+  tasks = Array.from({length:4000}, (_, i) => ({...item, id:"history-" + i}));
+  tasks[0] = {...tasks[0], state:"sending", done:0};
+  let reads = 0;
+  await longPage.route("**/api/transfers", async route => {
+    reads++;
+    tasks[0].done = Math.min(990, tasks[0].done + 50);
+    await route.fulfill({json:{settings,tasks}});
+  });
+  await longPage.goto(base + "/#transfer");
+  await longPage.locator("#transfer-task-history-0 progress").waitFor();
+  assert.equal(await longPage.locator(".transfer-task").count(), 24);
+  const cancel = longPage.locator("#transfer-task-history-0 [data-transfer-action=cancel]");
+  await cancel.focus();
+  const amount = await longPage.locator("#transfer-task-history-0 progress").evaluate(n => n.value);
+  await longPage.evaluate(() => refreshTransfers());
+  assert.ok(await longPage.locator("#transfer-task-history-0 progress").evaluate(n => n.value) > amount);
+  assert.equal(await cancel.evaluate(n => n === document.activeElement), true);
+  await longPage.locator("#transfer-more").click();
+  assert.equal(await longPage.locator(".transfer-task").count(), 48);
+  await longPage.goto(base + "/#transfer/task/history-3999");
+  await longPage.locator("#transfer-task-history-3999:focus").waitFor();
+  assert.ok(await longPage.locator(".transfer-task").count() <= 49);
+  await longPage.emulateMedia({reducedMotion:"no-preference"});
+  const samples = await longPage.evaluate(async () => {
+    const samples = [];
+    let last;
+    for (let i = 0; i < 151; i++) {
+      const current = await new Promise(resolve => requestAnimationFrame(resolve));
+      if (last !== undefined) samples.push(current - last);
+      last = current;
+      window.scrollBy(0, -4);
+      if (i === 40 || i === 100) void refreshTransfers();
+    }
+    samples.sort((a,b) => a-b);
+    return {frames:samples.length, medianMs:samples[75], p95Ms:samples[142], above33ms:samples.filter(n=>n>33.34).length};
+  });
+  console.log("4,000-record dark-mode Chromium scrolling with two requested refreshes:", JSON.stringify(samples));
+  await longPage.setViewportSize({width:320,height:690});
+  await longPage.emulateMedia({reducedMotion:"reduce"});
+  assert.equal(await longPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth),true);
+  await longPage.locator('[data-workspace="sync"]').click();
+  await longPage.screenshot({path:path.join(output,"dark-narrow-sync.png"),animations:"disabled",fullPage:true});
+  const before = reads;
+  await longPage.waitForTimeout(2700);
+  assert.equal(reads, before);
+  await longPage.close();
   assert.deepEqual(errors,[]);
   console.log("Transfer UI checks passed: all tutorial steps, replay/skip/focus, desktop/mobile, settings, multipart upload, received files, save dispatch, polling focus, removal, reduced motion.");
  }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

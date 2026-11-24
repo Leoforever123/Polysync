@@ -10,6 +10,7 @@ import java.util.concurrent.Executors
 
 class SyncService : Service() {
     companion object {
+        const val LISTEN_PORT = 45124
         @Volatile var engine: Engine? = null
         @Volatile var error = ""
         @Volatile var visible = false
@@ -49,14 +50,14 @@ class SyncService : Service() {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(this, 1, Intent(this, SyncService::class.java).setAction("stop"), PendingIntent.FLAG_IMMUTABLE)
         startForeground(1, Notification.Builder(this, "sync").setContentTitle("PolySync 可接收文件")
-            .setContentText("后台空闲 10 分钟后停止；点击打开")
+            .setContentText("点击查看传输，后台空闲 10 分钟后停止")
             .setSmallIcon(android.R.drawable.stat_sys_upload_done).setContentIntent(open)
             .addAction(Notification.Action.Builder(null, "停止", stop).build()).setOngoing(true).build())
         lifecycle.execute {
             try {
                 if (destroyed) return@execute
                 val next = Mobile.newEngine()
-                next.start(filesDir.absolutePath + "/polysync", Build.MODEL, ":45123")
+                next.start(filesDir.absolutePath + "/polysync", Build.MODEL + " · 预览版", ":$LISTEN_PORT")
                 synchronized(lifecycleLock) {
                     if (destroyed) next.stop() else { engine = next; error = "" }
                 }

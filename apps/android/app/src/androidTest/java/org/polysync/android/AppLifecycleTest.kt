@@ -53,7 +53,7 @@ class AppLifecycleTest : InstrumentationTestCase() {
             }
         }
     }
-    private fun portFree(): Boolean = try { ServerSocket(45123, 1, InetAddress.getByName("127.0.0.1")).use { }; true } catch (_: Exception) { false }
+    private fun portFree(): Boolean = try { ServerSocket(SyncService.LISTEN_PORT, 1, InetAddress.getByName("127.0.0.1")).use { }; true } catch (_: Exception) { false }
     private fun waitUntil(test: () -> Boolean) {
         val deadline = System.currentTimeMillis() + 15_000
         while (System.currentTimeMillis() < deadline) { if (test()) return; Thread.sleep(100) }

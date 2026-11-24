@@ -37,16 +37,36 @@ type NearbyDevice struct {
 	Online      bool      `json:"online"`
 }
 
+const (
+	RoleCollaborator = "collaborator"
+	RoleFollower     = "follower"
+)
+
+// A member is an explicitly paired neighbor; trust is never inherited over a relay.
+type ShareMember struct {
+	GrantID          string `json:"grantId,omitempty"`
+	WriteBackPending bool   `json:"writeBackPending,omitempty"`
+	DeviceID         string `json:"deviceId"`
+	Role             string `json:"role"`
+	AllowWriteBack   bool   `json:"allowWriteBack"`
+	State            string `json:"state"`
+	InvitationID     string `json:"invitationId,omitempty"`
+	Address          string `json:"address,omitempty"`
+	Legacy           bool   `json:"legacy,omitempty"`
+}
+
 type Share struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	Path            string `json:"path"`
-	Secret          string `json:"secret"`
-	PeerDeviceID    string `json:"peerDeviceId,omitempty"`
-	PeerAddress     string `json:"peerAddress,omitempty"`
-	State           string `json:"state,omitempty"`
-	AutoSync        bool   `json:"autoSync"`
-	IntervalSeconds int    `json:"intervalSeconds"`
+	LocalRole       string        `json:"localRole,omitempty"`
+	Members         []ShareMember `json:"members,omitempty"`
+	ID              string        `json:"id"`
+	Name            string        `json:"name"`
+	Path            string        `json:"path"`
+	Secret          string        `json:"secret"`
+	PeerDeviceID    string        `json:"peerDeviceId,omitempty"`
+	PeerAddress     string        `json:"peerAddress,omitempty"`
+	State           string        `json:"state,omitempty"`
+	AutoSync        bool          `json:"autoSync"`
+	IntervalSeconds int           `json:"intervalSeconds"`
 }
 
 type PairingRequest struct {
@@ -60,13 +80,15 @@ type PairingRequest struct {
 }
 
 type ShareInvitation struct {
-	ID         string    `json:"id"`
-	ShareID    string    `json:"shareId"`
-	Name       string    `json:"name"`
-	DeviceID   string    `json:"deviceId"`
-	DeviceName string    `json:"deviceName"`
-	Address    string    `json:"address"`
-	CreatedAt  time.Time `json:"createdAt"`
+	Role           string    `json:"role,omitempty"`
+	AllowWriteBack bool      `json:"allowWriteBack,omitempty"`
+	ID             string    `json:"id"`
+	ShareID        string    `json:"shareId"`
+	Name           string    `json:"name"`
+	DeviceID       string    `json:"deviceId"`
+	DeviceName     string    `json:"deviceName"`
+	Address        string    `json:"address"`
+	CreatedAt      time.Time `json:"createdAt"`
 }
 
 type Conflict struct {
@@ -154,4 +176,17 @@ type PairCode struct {
 	ShareID string `json:"shareId"`
 	Secret  string `json:"secret"`
 	Name    string `json:"name"`
+}
+
+// A revision with an empty hash is a retained deletion.
+type GroupRevision struct {
+	Entry
+	Clock map[string]uint64 `json:"clock"`
+}
+
+type Revisions map[string]GroupRevision
+
+type GroupState struct {
+	Records Revisions `json:"records"`
+	Pending Revisions `json:"pending,omitempty"`
 }

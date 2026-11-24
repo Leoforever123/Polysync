@@ -13,6 +13,7 @@ import (
 	"polysync/internal/discovery"
 	"polysync/internal/model"
 	"polysync/internal/store"
+	"polysync/internal/syncer"
 	"polysync/internal/update"
 )
 
@@ -36,6 +37,7 @@ type Service struct {
 	statuses           map[string]model.RuntimeStatus
 	activities         []model.Activity
 	locks              map[string]*sync.Mutex
+	planSync           func(server, client, baseline []model.Entry, clientName string, now time.Time) model.Plan
 	listener           net.Listener
 	listenPort         int
 	wg                 sync.WaitGroup
@@ -65,6 +67,7 @@ func NewWithOptions(dataStore *store.Store, options Options) *Service {
 	service := &Service{
 		inboundSlots: make(chan struct{}, 32), pairSources: make(map[string]pairRate),
 		discovery: options.Discovery,
+		planSync:  syncer.BuildPlan,
 		options:   options,
 		ctx:       ctx, cancel: cancel, transfers: newTransferManager(dataStore.Dir()),
 		store: dataStore, statuses: make(map[string]model.RuntimeStatus), locks: make(map[string]*sync.Mutex),

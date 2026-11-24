@@ -10,13 +10,15 @@ import android.view.View
 import android.widget.*
 
 /** Small native design system: no web engine, image assets or external fonts. */
-object Design {
-    val paper = Color.rgb(247, 248, 242)
-    val ink = Color.rgb(28, 51, 41)
-    val muted = Color.rgb(103, 122, 109)
-    val green = Color.rgb(45, 105, 77)
-    val mint = Color.rgb(230, 239, 222)
-    val line = Color.rgb(222, 229, 216)
+class Design(c: Context) {
+    val paper = c.getColor(R.color.ps_paper)
+    val surface = c.getColor(R.color.ps_surface)
+    val ink = c.getColor(R.color.ps_ink)
+    val muted = c.getColor(R.color.ps_muted)
+    val green = c.getColor(R.color.ps_accent)
+    val mint = c.getColor(R.color.ps_mint)
+    val line = c.getColor(R.color.ps_line)
+    private val onAccent = c.getColor(R.color.ps_on_accent)
     fun dp(c: Context, n: Int) = (n * c.resources.displayMetrics.density).toInt()
     fun shape(c: Context, color: Int, radius: Int = 22, border: Int = 0) = GradientDrawable().apply {
         setColor(color); cornerRadius = dp(c, radius).toFloat()
@@ -30,18 +32,18 @@ object Design {
     fun button(c: Context, value: String, primary: Boolean = false, action: () -> Unit) = Button(c).apply {
         text = value; textSize = 14f; isAllCaps = false; stateListAnimator = null
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-        setTextColor(if (primary) Color.WHITE else green)
+        setTextColor(if (primary) onAccent else green)
         minimumHeight = dp(c, 48); minHeight = dp(c, 48); setPadding(dp(c, 16), dp(c, 10), dp(c, 16), dp(c, 10))
         val states = StateListDrawable().apply {
-            addState(intArrayOf(android.R.attr.state_focused), shape(c, if(primary) ink else mint, 16, green))
-            addState(intArrayOf(), shape(c, if (primary) green else Color.WHITE, 16, if (primary) 0 else line))
+            addState(intArrayOf(android.R.attr.state_focused), shape(c, if(primary) green else mint, 16, green))
+            addState(intArrayOf(), shape(c, if (primary) green else surface, 16, if (primary) 0 else line))
         }
-        background = RippleDrawable(ColorStateList.valueOf(0x22346b50), states, shape(c, Color.WHITE, 16))
+        background = RippleDrawable(ColorStateList.valueOf((green and 0x00ffffff) or 0x33000000), states, shape(c, Color.WHITE, 16))
         setOnClickListener { action() }
     }
 }
 
-class Mark @JvmOverloads constructor(context: Context, private val kind: String = "brand", private val tint: Int = Design.green) : View(context) {
+class Mark @JvmOverloads constructor(context: Context, private val kind: String = "brand", private val tint: Int = context.getColor(R.color.ps_accent)) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.7f; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
     private val path = Path()
     private val centers = floatArrayOf(10f,19f,16f,11f,23f,19f)

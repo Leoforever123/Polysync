@@ -6,12 +6,12 @@ android {
     useLibrary("android.test.base")
     useLibrary("android.test.mock")
     defaultConfig {
-        applicationId = "org.polysync.android.debug"
+        applicationId = "org.polysync.android.preview"
         minSdk = 29
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.5.0-dev.4"
-        ndk { abiFilters += "arm64-v8a" }
+        versionCode = 5
+        versionName = "0.5.0-dev.5"
+        ndk { abiFilters += providers.gradleProperty("polysyncAbi").orElse("arm64-v8a").get() }
         testInstrumentationRunner = "android.test.InstrumentationTestRunner"
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }

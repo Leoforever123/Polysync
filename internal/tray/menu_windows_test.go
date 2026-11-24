@@ -84,3 +84,18 @@ func TestHighResolutionIconResource(t *testing.T) {
 		t.Fatal("invalid high resolution icon")
 	}
 }
+
+func TestMenuPaletteFollowsSystemAppearance(t *testing.T) {
+	light, dark := paletteForMenu(false), paletteForMenu(true)
+	luminance := func(color uintptr) uintptr {
+		return 299*(color&255) + 587*((color>>8)&255) + 114*((color>>16)&255)
+	}
+	for _, text := range []uintptr{dark.text, dark.caption, dark.danger} {
+		if luminance(text) <= luminance(dark.selection) || luminance(text) <= luminance(dark.background) {
+			t.Fatal("dark menu text must remain lighter than its background and selection")
+		}
+	}
+	if luminance(light.text) >= luminance(light.background) || light.selection == dark.selection {
+		t.Fatal("light menu contrast or selected-row palette lost")
+	}
+}

@@ -192,3 +192,40 @@ func waitFor(t *testing.T, fn func() bool) {
 	}
 	t.Fatal("timed out")
 }
+
+func TestWorkspaceRoleAndMemberBridge(t *testing.T) {
+	e := testEngine(t)
+	for _, tc := range []struct {
+		role       string
+		write      bool
+		invitation string
+	}{
+		{"administrator", false, ""}, {"collaborator", true, ""}, {"follower", false, "absent"},
+	} {
+		if _, err := e.CreateWorkspaceWithRole("Documents", "paired", tc.invitation, tc.role, tc.write); err == nil {
+			t.Errorf("unexpected success for %+v", tc)
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(e.dir, "workspaces"))
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("unexpected private directories: %v, %v", entries, err)
+	}
+	for _, route := range []struct{ method, path string }{
+		{"PUT", "/api/shares/abc/members/device"}, {"DELETE", "/api/shares/abc/members/device"}, {"GET", "/api/shares/abc/writeback-preview"}, {"POST", "/api/shares/abc/writeback-confirm"},
+	} {
+		if !allowed(route.method, route.path) {
+			t.Errorf("missing route %+v", route)
+		}
+	}
+	if !allowed("POST", "/api/shares/abc/members") {
+		t.Fatal("missing member invitation route")
+	}
+	for _, path := range []string{"/api/shares/../members", "/api/shares/x//members", "/api/shares/x/members?path=/tmp"} {
+		if allowed("POST", path) {
+			t.Errorf("unexpected member route %q", path)
+		}
+	}
+	if allowed("GET", "/api/shares/abc/members") {
+		t.Fatal("unexpected method")
+	}
+}

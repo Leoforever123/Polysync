@@ -64,6 +64,7 @@ test("unpair confirmation escapes names, explains scope and preserves focused de
   a.run('renderDevices()');
   const writes = a.node('#device-list').writes;
   a.document.activeElement = { matches: selector => selector === '.unpair-device', dataset: {id: 'peer'} };
+  a.node('#device-list').contains = node => node === a.document.activeElement;
   a.run('device.online = true; renderDevices()');
   assert.equal(a.node('#device-list').writes, writes);
   a.run('openUnpair("peer")');
@@ -75,6 +76,19 @@ test("unpair confirmation escapes names, explains scope and preserves focused de
   a.context.share = {id:'s', name:'local', path:'local', state:'unpaired', status:{state:'synced'}};
   assert.match(a.run('shareCard(share)'), /sync-button" disabled/);
   assert.match(a.run('statusText(share)'), /已取消配对/);
+});
+
+test("the global device dialog lists offline pairs and keeps manual pairing available", () => {
+  const a = app();
+  a.run('state.data = {pairedDevices: [], nearbyDevices: []}; renderDevices(); openNearby()');
+  assert.equal(a.node('#add-device').textContent, '添加设备');
+  assert.doesNotMatch(a.node('#dialog-device-list').innerHTML, /unpair-device/);
+  a.run('state.data.pairedDevices = [{id:"saved", name:"离线电脑", online:false}]; state.data.nearbyDevices = [{id:"new", name:"新电脑"}]; renderDevices()');
+  assert.equal(a.node('#add-device').textContent, '管理设备');
+  assert.equal(a.node('#modal-title').textContent, '管理设备');
+  assert.match(a.node('#dialog-device-list').innerHTML, /unpair-device" data-id="saved"/);
+  assert.match(a.node('#dialog-device-list').innerHTML, /pair-device" data-id="new"/);
+  assert.match(a.node('#modal-content').innerHTML, /id="manual-pair-form"/);
 });
 
 test("unpair submits DELETE only on confirmation and keeps server errors visible for retry", async () => {
@@ -145,4 +159,27 @@ test("update controls require verified download and supported platform", () => {
  assert.equal(updateButtonState({phase:"ready",available:true,supported:true}).install,true);
  assert.equal(updateButtonState({phase:"downloading",available:true,supported:true}).check,false);
  assert.equal(updateButtonState({phase:"available",available:true,supported:false}).download,false);
+});
+
+test("folder invitations only preselect a unique online candidate and exclude existing members", () => {
+  const a = app();
+  a.run('state.data = {device:{id:"local"}, pairedDevices:[{id:"old",name:"已有",online:true},{id:"one",name:"唯一在线",online:true},{id:"two",name:"离线",online:false}]}');
+  a.run('openShareInvite({id:"share",path:"/work",name:"文件夹",members:[{deviceId:"old",state:"active"}]})');
+  const html = a.node("#modal-content").innerHTML;
+  assert.doesNotMatch(html, /value="old"|id="share-path"/);
+  assert.match(html, /value="one" selected/);
+  assert.match(html, /id="write-back-row" hidden/);
+  a.run('openShareInvite()');
+  assert.match(a.node("#modal-content").innerHTML, /<option value="">选择一台设备/);
+  assert.match(a.run('shareCard({id:"s",name:"x",path:"/x",localRole:"follower",state:"active",members:[{deviceId:"old",role:"collaborator",state:"active"}]})'), /仅接收更新/);
+  assert.doesNotMatch(a.run('shareCard({id:"s",localRole:"follower",state:"active"})'), /invite-member/);
+});
+
+test("a missing peer takes the user straight into pairing and cancel clears the pending share intent", () => {
+  const a = app();
+  a.run('state.data = {pairedDevices:[],nearbyDevices:[]}; openShareInvite({id:"existing",members:[]})');
+  assert.equal(a.run("state.modal"), "nearby");
+  assert.equal(a.run("state.resumeInvite.shareID"), "existing");
+  a.run("dismissModal()");
+  assert.equal(a.run("state.resumeInvite"), null);
 });

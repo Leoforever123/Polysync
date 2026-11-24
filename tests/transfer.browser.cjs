@@ -36,7 +36,7 @@ async function instance(name) {
   const a = await instance("a"), b = await instance("b");
   // Preserve the existing synchronization UI regression suite.
   execFileSync(process.execPath, [path.join(__dirname, "ui.browser.cjs")], { env: { ...process.env, POLYSYNC_TEST_URL: a.base }, stdio: "inherit", windowsHide: true });
-  browser = await chromium.launch({ channel: "chrome", headless: true });
+  browser = await chromium.launch({ channel: process.env.POLYSYNC_TEST_BROWSER_CHANNEL || "chrome", headless: true });
   const page = await browser.newPage({ viewport: { width: 1365, height: 1050 } });
   const errors = []; page.on("pageerror", e => errors.push(e.message));
   await page.goto(a.base);

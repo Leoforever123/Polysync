@@ -14,5 +14,5 @@ mkdir -p apps/android/app/libs dist
 gomobile bind -target=android/arm64 -androidapi=29 -javapkg=org.polysync.core -ldflags='-s -w' -o apps/android/app/libs/polysync.aar ./mobile
 # Avoid incremental APK holes retaining bytes of superseded native libraries.
 "$GRADLE" -p apps/android --no-daemon :app:clean :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
-cp apps/android/app/build/outputs/apk/debug/app-debug.apk dist/polysync-android-arm64-debug.apk
-echo "Built dist/polysync-android-arm64-debug.apk (debug signing; no store upload)"
+cp apps/android/app/build/outputs/apk/debug/app-debug.apk dist/polysync-android-arm64-preview.apk
+echo "Built dist/polysync-android-arm64-preview.apk (debug signing; no store upload)"

@@ -23,12 +23,13 @@ import (
 )
 
 type Engine struct {
-	discovery *discovery.Service
-	mu        sync.RWMutex
-	svc       *service.Service
-	handler   http.Handler
-	dir       string
-	cancel    context.CancelFunc
+	discovery   *discovery.Service
+	mu          sync.RWMutex
+	workspaceMu sync.Mutex
+	svc         *service.Service
+	handler     http.Handler
+	dir         string
+	cancel      context.CancelFunc
 }
 
 func NewEngine() *Engine { return &Engine{} }
@@ -139,8 +140,11 @@ func (e *Engine) Request(method, path, body string) (string, error) {
 }
 
 func allowed(method, path string) bool {
-	if method == "GET" {
-		return path == "/api/status" || path == "/api/transfers"
+	if !strings.HasPrefix(path, "/api/") || strings.ContainsAny(path, "?#%\\") || strings.Contains(path, "..") || strings.Contains(path, "//") || strings.HasSuffix(path, "/") {
+		return false
+	}
+	if method == "GET" && (path == "/api/status" || path == "/api/transfers") {
+		return true
 	}
 	if method == "POST" && (path == "/api/pair/start" || path == "/api/pair/confirm") {
 		return true
@@ -155,14 +159,28 @@ func allowed(method, path string) bool {
 	if len(p) == 5 && p[0] == "api" && p[1] == "pair" && p[2] == "requests" && p[4] == "approve" {
 		return method == "POST"
 	}
-	if len(p) == 4 && p[0] == "api" && p[1] == "shares" && p[3] == "sync" {
-		return method == "POST"
+	if len(p) >= 4 && p[1] == "shares" && safeName(p[2]) {
+		if len(p) == 5 && p[3] == "members" && safeName(p[4]) {
+			return method == "PUT" || method == "DELETE"
+		}
+		if len(p) == 4 {
+			switch p[3] {
+			case "sync", "members", "writeback-confirm":
+				return method == "POST"
+			case "writeback-preview":
+				return method == "GET"
+			}
+		}
 	}
 	return len(p) == 4 && p[0] == "api" && p[1] == "transfers" && (p[3] == "cancel" || p[3] == "retry") && method == "POST"
 }
 
 func (e *Engine) call(method, path, body string) (string, error) {
-	r := httptest.NewRequest(method, "http://127.0.0.1"+path, strings.NewReader(body))
+	r, err := http.NewRequest(method, "http://127.0.0.1"+path, strings.NewReader(body))
+	if err != nil {
+		return "", errors.New("请求地址无效")
+	}
+	r.RemoteAddr = "127.0.0.1:0"
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	e.handler.ServeHTTP(w, r)
@@ -242,29 +260,66 @@ func (e *Engine) SendImport(peerID, importName, displayName string) (string, err
 
 // CreateWorkspace creates only an app-managed synchronization root.
 func (e *Engine) CreateWorkspace(name, peerID, invitationID string) (string, error) {
+	return e.CreateWorkspaceWithRole(name, peerID, invitationID, "", false)
+}
+
+// CreateWorkspaceWithRole invites a paired device with folder-specific permissions.
+// When accepting, permissions come from the authenticated invitation.
+func (e *Engine) CreateWorkspaceWithRole(name, peerID, invitationID, role string, allowWriteBack bool) (string, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	if e.svc == nil {
 		return "", errors.New("服务未启动")
 	}
+	e.workspaceMu.Lock()
+	defer e.workspaceMu.Unlock()
 	if !safeName(name) {
 		return "", errors.New("工作区名称无效")
+	}
+	if invitationID != "" {
+		var shareID string
+		for _, inv := range e.svc.ShareInvitations() {
+			if inv.ID == invitationID {
+				shareID = inv.ShareID
+				break
+			}
+		}
+		if shareID == "" || !safeName(invitationID) || strings.ContainsAny(invitationID, "?#%") {
+			return "", errors.New("邀请无效")
+		}
+		if _, exists := e.svc.Store().Share(shareID); exists {
+			path, err := e.workspace(shareID)
+			if err != nil {
+				return "", err
+			}
+			body, _ := json.Marshal(map[string]any{"path": path, "autoSync": false, "intervalSeconds": 30})
+			return e.call("POST", "/api/share-invitations/"+invitationID+"/accept", string(body))
+		}
+	} else if (role != "" && role != model.RoleCollaborator && role != model.RoleFollower) || (allowWriteBack && role != model.RoleFollower) {
+		return "", errors.New("工作区成员权限无效")
 	}
 	path := filepath.Join(e.dir, "workspaces", store.RandomID())
 	if err := os.Mkdir(path, 0700); err != nil {
 		return "", err
 	}
-	body, _ := json.Marshal(map[string]any{"path": path, "name": name, "deviceId": peerID, "autoSync": false, "intervalSeconds": 30})
+	invite := map[string]any{"path": path, "name": name, "deviceId": peerID, "autoSync": false, "intervalSeconds": 30}
+	if role != "" {
+		invite["role"], invite["allowWriteBack"] = role, allowWriteBack
+	}
+	body, _ := json.Marshal(invite)
 	endpoint := "/api/shares/invite"
 	if invitationID != "" {
-		if !safeName(invitationID) {
-			return "", errors.New("邀请无效")
-		}
 		endpoint = "/api/share-invitations/" + invitationID + "/accept"
 		body, _ = json.Marshal(map[string]any{"path": path, "autoSync": false, "intervalSeconds": 30})
 	}
 	result, err := e.call("POST", endpoint, string(body))
 	if err != nil {
+		// An interrupted confirmation can leave a pending membership for retry.
+		for _, share := range e.svc.Store().Config().Shares {
+			if share.Path == path {
+				return "", err
+			}
+		}
 		_ = os.Remove(path)
 	}
 	return result, err
@@ -335,6 +390,19 @@ func (e *Engine) ImportToWorkspace(id, importName, displayName string) error {
 	path, err := e.workspace(id)
 	if err != nil {
 		return err
+	}
+	share, _ := e.svc.Store().Share(id)
+	if share.LocalRole == model.RoleFollower {
+		canWrite := false
+		for _, member := range share.Members {
+			if member.State == "active" && member.AllowWriteBack && !member.WriteBackPending {
+				canWrite = true
+				break
+			}
+		}
+		if !canWrite {
+			return errors.New("此工作区只接收副本")
+		}
 	}
 	srcRoot, err := os.OpenRoot(filepath.Join(e.dir, "imports"))
 	if err != nil {

@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"polysync/internal/model"
@@ -52,6 +54,14 @@ func (s *Service) SyncShare(ctx context.Context, shareID string, manual bool) er
 	}
 	defer lock.Unlock()
 
+	if share.LocalRole != "" {
+		return s.syncGroup(ctx, share, manual)
+	}
+	return s.syncLegacyLocked(ctx, share, manual)
+}
+
+func (s *Service) syncLegacyLocked(ctx context.Context, share model.Share, manual bool) error {
+	shareID := share.ID
 	now := time.Now()
 	s.updateStatus(shareID, func(status *model.RuntimeStatus) {
 		status.State = "syncing"
@@ -143,19 +153,22 @@ func (s *Service) SyncShare(ctx context.Context, shareID string, manual bool) er
 		return s.syncFailed(shareID, err)
 	}
 	for _, filePath := range plan.ClientDeletes {
-		if err := syncer.DeleteFile(share.Path, filePath, historyRoot); err != nil {
+		if err := syncer.DeletePlannedFile(ctx, share.Path, filePath, historyRoot, scannedHash(manifest, filePath)); err != nil {
 			return s.syncFailed(shareID, err)
 		}
 	}
 	for _, transfer := range plan.ServerSends {
-		if err := syncer.ReceiveFile(ctx, framer, share.Path, historyRoot, transfer); err != nil {
+		if err := syncer.ReceiveFile(ctx, framer, share.Path, historyRoot, transfer, scannedHash(manifest, transfer.Dest)); err != nil {
 			return s.syncFailed(shareID, err)
 		}
 	}
-	var complete protocol.Marker
+	var complete responseFrame
 	if err := framer.ReadJSON(&complete); err != nil || complete.Type != "transfers_done" {
 		if err == nil {
 			err = errors.New("unexpected transfer completion frame")
+			if complete.Type == "result" {
+				err = remoteError(complete)
+			}
 		}
 		return s.syncFailed(shareID, err)
 	}
@@ -201,11 +214,32 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 		return
 	}
 	switch hello.Operation {
-	case "pair_request", "pair_confirm", "share_invite", "share_accept":
+	case "pair_request", "pair_confirm", "share_invite", "share_accept", "group_invite", "group_accept":
 		s.peerControlMu.RLock()
 		defer s.peerControlMu.RUnlock()
 	}
 	switch hello.Operation {
+	case "group_invite", "group_accept":
+		var err error
+		if hello.Operation == "group_invite" {
+			err = s.handleGroupInvite(connection, framer, hello)
+		} else {
+			err = s.handleGroupAccept(connection, framer, hello)
+		}
+		if err != nil {
+			_ = writeError(framer, "group", err.Error())
+		}
+		return
+	case "group_sync":
+		if err := s.beginSyncWork(); err != nil {
+			_ = writeError(framer, "updating", err.Error())
+			return
+		}
+		defer s.endSyncWork()
+		if err := s.receiveGroup(ctx, connection, framer, hello); err != nil {
+			_ = writeError(framer, "group", err.Error())
+		}
+		return
 	case "transfer":
 		_ = connection.SetDeadline(time.Now().Add(sessionTimeout))
 		s.handleTransfer(ctx, connection, framer, hello)
@@ -247,7 +281,12 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 		_ = writeError(framer, "unknown_share", "此设备未配置该同步文件夹")
 		return
 	}
-	if share.PeerDeviceID != hello.DeviceID || share.State != "active" {
+	legacyPeer := share.PeerDeviceID == hello.DeviceID
+	if share.LocalRole != "" {
+		m, ok := shareMember(share, hello.DeviceID)
+		legacyPeer = ok && m.Legacy && m.State == "active" && share.LocalRole == model.RoleCollaborator
+	}
+	if !legacyPeer || share.State != "active" {
 		_ = writeError(framer, "share_auth", "该设备未获授权访问此同步文件夹")
 		return
 	}
@@ -302,14 +341,15 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 		s.syncFailed(share.ID, err)
 		return
 	}
-	plan := syncer.BuildPlan(serverManifest, request.Manifest, baseline, hello.DeviceName, time.Now())
+	plan := s.planSync(serverManifest, request.Manifest, baseline, hello.DeviceName, time.Now())
 	historyRoot := filepath.Join(s.store.Dir(), "history", share.ID)
 	if err := framer.WriteJSON(protocol.PlanMessage{Type: "plan", Plan: plan, ResolvedConflicts: s.resolvedConflictIDs(share.ID)}); err != nil {
 		s.syncFailed(share.ID, err)
 		return
 	}
 	for _, transfer := range plan.ClientSends {
-		if err := syncer.ReceiveFile(ctx, framer, share.Path, historyRoot, transfer); err != nil {
+		if err := syncer.ReceiveFile(ctx, framer, share.Path, historyRoot, transfer, scannedHash(serverManifest, transfer.Dest)); err != nil {
+			_ = writeError(framer, "receive", err.Error())
 			s.syncFailed(share.ID, err)
 			return
 		}
@@ -323,7 +363,7 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 		return
 	}
 	for _, filePath := range plan.ServerDeletes {
-		if err := syncer.DeleteFile(share.Path, filePath, historyRoot); err != nil {
+		if err := syncer.DeletePlannedFile(ctx, share.Path, filePath, historyRoot, scannedHash(serverManifest, filePath)); err != nil {
 			_ = writeError(framer, "delete", err.Error())
 			s.syncFailed(share.ID, err)
 			return
@@ -474,4 +514,15 @@ func manifestsEqual(left, right []model.Entry) bool {
 		}
 	}
 	return true
+}
+
+// Scan returns entries sorted by relative path. Consult only the local scan.
+func scannedHash(manifest []model.Entry, path string) string {
+	i, found := slices.BinarySearchFunc(manifest, path, func(e model.Entry, path string) int {
+		return strings.Compare(e.Path, path)
+	})
+	if !found {
+		return ""
+	}
+	return manifest[i].Hash
 }
