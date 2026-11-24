@@ -7,8 +7,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"polysync/internal/model"
+	"polysync/internal/protocol"
 )
 
 func TestGroupOnlyPersistsReceiptsForWitnessedConflicts(t *testing.T) {
@@ -117,6 +119,35 @@ func TestGroupCorruptLocalRevisionFailsWithoutTouchingFiles(t *testing.T) {
 	}
 	bad := prior.Records["note"]
 	bad.Hash = "f"
+	checkFirstFrame := func() {
+		t.Helper()
+		peer, paired := b.s.store.PairedDevice(a.id)
+		if !paired {
+			t.Fatal("receiving device must be paired")
+		}
+		conn, err := b.s.dialTLS(t.Context(), "127.0.0.1:"+intText(a.s.ListenPort()), &peer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		wire := protocol.NewFramer(conn)
+		hello := protocol.Hello{Type: "hello", Operation: "group_sync", Protocol: model.ProtocolVersion, ShareID: id, DeviceID: b.id, ListenPort: b.s.ListenPort()}
+		if err := wire.WriteJSON(hello); err != nil {
+			t.Fatal(err)
+		}
+		// Do not write a policy frame. The receiving side must reject its
+		// own journal before indicating readiness for any more input.
+		var first protocol.Result
+		if err := wire.ReadJSON(&first); err != nil {
+			t.Fatal(err)
+		}
+		if first.Type != "result" || first.OK || !strings.Contains(first.Message, "本机文件版本记录") {
+			t.Fatalf("first frame did not diagnose the receiving journal: %+v", first)
+		}
+	}
 	for _, pending := range []bool{false, true} {
 		state := prior
 		state.Records = maps.Clone(prior.Records)
@@ -128,6 +159,7 @@ func TestGroupCorruptLocalRevisionFailsWithoutTouchingFiles(t *testing.T) {
 		if err := a.s.store.SaveGroupState(sh.ReplicaID, state); err != nil {
 			t.Fatal(err)
 		}
+		checkFirstFrame()
 		for _, pair := range [][]*groupTestNode{{a, b}, {b, a}} {
 			err := groupRound(t, id, pair[0], pair[1])
 			if err == nil || !strings.Contains(err.Error(), "本机文件版本记录") {
@@ -144,7 +176,9 @@ func TestGroupCorruptLocalRevisionFailsWithoutTouchingFiles(t *testing.T) {
 	if err := a.s.store.SaveGroupState(sh.ReplicaID, prior); err != nil {
 		t.Fatal(err)
 	}
+	writeTestFile(t, b.dir, "note", "after journal recovery")
 	groupSync(t, id, b, a)
+	assertTestFile(t, a.dir, "note", "after journal recovery")
 }
 
 func TestGroupFollowerCanSwitchToUpstreamWithEarlierHistory(t *testing.T) {
