@@ -56,6 +56,7 @@ type ShareMember struct {
 }
 
 type Share struct {
+	ReplicaID       string        `json:"replicaId,omitempty"`
 	LocalRole       string        `json:"localRole,omitempty"`
 	Members         []ShareMember `json:"members,omitempty"`
 	ID              string        `json:"id"`
@@ -67,6 +68,24 @@ type Share struct {
 	State           string        `json:"state,omitempty"`
 	AutoSync        bool          `json:"autoSync"`
 	IntervalSeconds int           `json:"intervalSeconds"`
+}
+
+// RefreshMembers chooses a reachable relationship for legacy status displays.
+func (s *Share) RefreshMembers() {
+	if len(s.Members) == 0 {
+		s.PeerDeviceID, s.PeerAddress, s.State = "", "", "disconnected"
+		return
+	}
+	selected := s.Members[0]
+	for _, m := range s.Members {
+		if m.State == "active" {
+			selected = m
+			if m.DeviceID == s.PeerDeviceID {
+				break
+			}
+		}
+	}
+	s.PeerDeviceID, s.PeerAddress, s.State = selected.DeviceID, selected.Address, selected.State
 }
 
 type PairingRequest struct {
@@ -181,7 +200,8 @@ type PairCode struct {
 // A revision with an empty hash is a retained deletion.
 type GroupRevision struct {
 	Entry
-	Clock map[string]uint64 `json:"clock"`
+	ConflictOrigin string            `json:"conflictOrigin,omitempty"`
+	Clock          map[string]uint64 `json:"clock"`
 }
 
 type Revisions map[string]GroupRevision

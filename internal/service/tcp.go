@@ -41,6 +41,11 @@ func (s *Service) SyncShare(ctx context.Context, shareID string, manual bool) er
 		return err
 	}
 	defer s.endSyncWork()
+	lock := s.lockFor(shareID)
+	if !lock.TryLock() {
+		return ErrBusy
+	}
+	defer lock.Unlock()
 	share, exists := s.store.Share(shareID)
 	if !exists {
 		return fmt.Errorf("sync folder not found")
@@ -48,11 +53,6 @@ func (s *Service) SyncShare(ctx context.Context, shareID string, manual bool) er
 	if share.State == "unpaired" {
 		return errors.New("此同步已因取消配对而停用，请重新配对并创建同步邀请")
 	}
-	lock := s.lockFor(shareID)
-	if !lock.TryLock() {
-		return ErrBusy
-	}
-	defer lock.Unlock()
 
 	if share.LocalRole != "" {
 		return s.syncGroup(ctx, share, manual)
@@ -281,6 +281,17 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 		_ = writeError(framer, "unknown_share", "此设备未配置该同步文件夹")
 		return
 	}
+	lock := s.lockFor(share.ID)
+	if !lock.TryLock() {
+		_ = writeError(framer, "busy", "对端正在执行另一轮同步，请稍后重试")
+		return
+	}
+	defer lock.Unlock()
+	share, exists = s.store.Share(hello.ShareID)
+	if !exists {
+		_ = writeError(framer, "unknown_share", "此设备未配置该同步文件夹")
+		return
+	}
 	legacyPeer := share.PeerDeviceID == hello.DeviceID
 	if share.LocalRole != "" {
 		m, ok := shareMember(share, hello.DeviceID)
@@ -311,13 +322,6 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 		return
 	}
 	s.learnPeer(share, hello, connection.RemoteAddr())
-	lock := s.lockFor(share.ID)
-	if !lock.TryLock() {
-		_ = writeError(framer, "busy", "对端正在执行另一轮同步，请稍后重试")
-		return
-	}
-	defer lock.Unlock()
-
 	s.updateStatus(share.ID, func(status *model.RuntimeStatus) {
 		status.State = "syncing"
 		status.Message = "正在与 " + hello.DeviceName + " 同步…"
@@ -445,7 +449,7 @@ func (s *Service) learnPeer(share model.Share, hello protocol.Hello, remote net.
 		device.LastSeen = time.Now()
 		_ = s.store.SavePairedDevice(device)
 	}
-	if share.PeerAddress == peer {
+	if share.LocalRole != "" || share.PeerAddress == peer {
 		return
 	}
 	share.PeerAddress = peer

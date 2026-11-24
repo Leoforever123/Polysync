@@ -20,6 +20,7 @@ func (s *Service) saveTransferAwareShare(share model.Share, update bool) error {
 			if share.Path != saved.Path {
 				return errors.New("多设备文件夹的位置固定，请新建共享以更换目录")
 			}
+			share.ReplicaID = saved.ReplicaID
 			share.LocalRole, share.Members, share.State = saved.LocalRole, saved.Members, saved.State
 			share.PeerDeviceID, share.PeerAddress = saved.PeerDeviceID, saved.PeerAddress
 		}

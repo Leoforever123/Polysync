@@ -356,6 +356,17 @@ func (s *Service) handleUpdateShare(writer http.ResponseWriter, request *http.Re
 
 func (s *Service) handleDeleteShare(writer http.ResponseWriter, request *http.Request) {
 	id := request.PathValue("id")
+	if !s.peerControlMu.TryLock() {
+		writeAPIError(writer, http.StatusConflict, ErrBusy)
+		return
+	}
+	defer s.peerControlMu.Unlock()
+	lock := s.lockFor(id)
+	if !lock.TryLock() {
+		writeAPIError(writer, http.StatusConflict, ErrBusy)
+		return
+	}
+	defer lock.Unlock()
 	share, exists := s.store.Share(id)
 	if !exists {
 		writeAPIError(writer, http.StatusNotFound, errors.New("同步文件夹不存在"))

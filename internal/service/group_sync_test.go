@@ -3,6 +3,8 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -68,14 +70,19 @@ func pairTestNodes(t *testing.T, nodes []*groupTestNode) {
 
 func groupJSON(t *testing.T, n *groupTestNode, endpoint string, input map[string]any) map[string]any {
 	t.Helper()
+	return memberRequest(t, n, "POST", endpoint, input, 2)
+}
+
+func memberRequest(t *testing.T, n *groupTestNode, method, endpoint string, input map[string]any, statusClass int) map[string]any {
+	t.Helper()
 	body, err := json.Marshal(input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := httptest.NewRequest("POST", endpoint, bytes.NewReader(body))
+	r := httptest.NewRequest(method, endpoint, bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	n.s.Handler().ServeHTTP(w, r)
-	if w.Code/100 != 2 {
+	if w.Code/100 != statusClass {
 		t.Fatalf("%s returned %d: %s", endpoint, w.Code, w.Body.String())
 	}
 	var result map[string]any
@@ -271,10 +278,115 @@ func TestGroupReadOnlyGrantEnforcedByUpstream(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeTestFile(t, b.dir, "not-approved", "private")
-	if err := groupRound(t, id, b, a); err == nil {
-		t.Fatal("upstream accepted ungranted writeback")
+	groupSync(t, id, b, a)
+	share, _ = b.s.store.Share(id)
+	if share.Members[0].AllowWriteBack || share.Members[0].WriteBackPending {
+		t.Fatal("upstream did not reset the ungranted writeback preference")
 	}
 	if _, err := os.Stat(filepath.Join(a.dir, "not-approved")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatal("unapproved file appeared upstream")
+	}
+}
+
+func TestGroupWriteBackPreviewRevocationAndDisconnect(t *testing.T) {
+	ns := groupNodes(t, 3)
+	a, b, c := ns[0], ns[1], ns[2]
+	writeTestFile(t, a.dir, "notes", "original")
+	writeTestFile(t, a.dir, "old", "retain until confirmed")
+	id := groupLink(t, "", a, b, model.RoleFollower, false)
+	groupLink(t, id, a, c, model.RoleCollaborator, false)
+	base := "/api/shares/" + id
+	member := base + "/members/" + b.id
+	writeTestFile(t, b.dir, "notes", "private edit")
+	writeTestFile(t, b.dir, "extra", "private addition")
+	if err := os.Remove(filepath.Join(b.dir, "old")); err != nil {
+		t.Fatal(err)
+	}
+	memberRequest(t, a, "PUT", member, map[string]any{"allowWriteBack": true}, 2)
+	groupSync(t, id, a, b)
+	groupSync(t, id, b, a)
+	assertTestFile(t, a.dir, "old", "retain until confirmed")
+	assertTestFile(t, a.dir, "notes", "original")
+	preview := memberRequest(t, b, "GET", base+"/writeback-preview", nil, 2)
+	if preview["added"] != float64(1) || preview["modified"] != float64(1) || preview["deleted"] != float64(1) || len(preview["paths"].([]any)) != 3 {
+		t.Fatalf("wrong preview: %#v", preview)
+	}
+	writeTestFile(t, b.dir, "extra", "different content")
+	memberRequest(t, b, "POST", base+"/writeback-confirm", map[string]any{"token": preview["token"]}, 4)
+	groupSync(t, id, a, b)
+	assertTestFile(t, a.dir, "old", "retain until confirmed")
+	preview = memberRequest(t, b, "GET", base+"/writeback-preview", nil, 2)
+	groupJSON(t, b, base+"/writeback-confirm", map[string]any{"token": preview["token"]})
+	groupSync(t, id, b, a)
+	groupSync(t, id, a, c)
+	assertTestFile(t, c.dir, "extra", "different content")
+	assertTestFile(t, c.dir, "notes", "private edit")
+	if _, err := os.Stat(filepath.Join(c.dir, "old")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("confirmed deletion missing: %v", err)
+	}
+	memberRequest(t, a, "PUT", member, map[string]any{"allowWriteBack": false}, 2)
+	writeTestFile(t, b.dir, "notes", "new private content")
+	groupSync(t, id, b, a)
+	assertTestFile(t, a.dir, "notes", "private edit")
+	assertTestFile(t, b.dir, "notes", "new private content")
+	memberRequest(t, a, "DELETE", member, nil, 2)
+	if err := groupRound(t, id, b, a); err == nil {
+		t.Fatal("removed member retained folder access")
+	}
+	groupSync(t, id, a, c)
+	if _, ok := a.s.store.PairedDevice(b.id); !ok {
+		t.Fatal("folder removal removed device pairing")
+	}
+	assertTestFile(t, b.dir, "notes", "new private content")
+	groupLink(t, id, a, b, model.RoleFollower, true)
+	groupSync(t, id, b, a)
+	preview = memberRequest(t, b, "GET", base+"/writeback-preview", nil, 2)
+	if preview["modified"] != float64(1) {
+		t.Fatalf("new grant did not require preview: %#v", preview)
+	}
+	assertTestFile(t, a.dir, "notes", "private edit")
+}
+
+func TestGroupConflictCopyPreservesExistingUserFile(t *testing.T) {
+	ns := groupNodes(t, 2)
+	a, b := ns[0], ns[1]
+	id := groupLink(t, "", a, b, model.RoleCollaborator, false)
+	left, right := "A changed", "B changed"
+	sumA, sumB := sha256.Sum256([]byte(left)), sha256.Sum256([]byte(right))
+	shorter := min(hex.EncodeToString(sumA[:]), hex.EncodeToString(sumB[:]))
+	first := groupConflictName("notes.txt", shorter)
+	loser := a
+	if shorter == hex.EncodeToString(sumB[:]) {
+		loser = b
+	}
+	writeTestFile(t, loser.dir, first, "my own file")
+	writeTestFile(t, a.dir, "notes.txt", left)
+	writeTestFile(t, b.dir, "notes.txt", right)
+	groupSync(t, id, a, b)
+	for _, n := range ns {
+		assertTestFile(t, n.dir, first, "my own file")
+		want := left
+		if loser == b {
+			want = right
+		}
+		assertTestFile(t, n.dir, strings.TrimSuffix(first, ".txt")+"-2.txt", want)
+	}
+}
+
+func TestGroupReceiveOnlyOfferRejectsRecordsBeforeFetchingContent(t *testing.T) {
+	valid := model.GroupRevision{Entry: model.Entry{Path: "published", Hash: strings.Repeat("a", 64)}, Clock: map[string]uint64{"replica": 1}}
+	records := model.Revisions{"published": valid}
+	if err := validateGroupOffer(records, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateGroupOffer(records, true); err == nil {
+		t.Fatal("read-only grant accepted a file advertisement")
+	}
+	valid.Hash = ""
+	if err := validateGroupOffer(model.Revisions{"published": valid}, true); err == nil {
+		t.Fatal("read-only grant accepted a deletion advertisement")
+	}
+	if err := validateGroupOffer(nil, true); err != nil {
+		t.Fatal(err)
 	}
 }

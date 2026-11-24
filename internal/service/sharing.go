@@ -176,10 +176,6 @@ func (s *Service) handleShareAccept(connection *tls.Conn, framer *protocol.Frame
 		return
 	}
 	share, exists := s.store.Share(request.ShareID)
-	if !exists || share.PeerDeviceID != hello.DeviceID || share.State != "pending" {
-		_ = writeError(framer, "share", "没有对应的待处理同步空间")
-		return
-	}
 	if share.LocalRole != "" {
 		_, err = s.editGroup(share.ID, func(sh *model.Share, exists bool) error {
 			if exists {
@@ -198,6 +194,10 @@ func (s *Service) handleShareAccept(connection *tls.Conn, framer *protocol.Frame
 			return
 		}
 		_ = framer.WriteJSON(protocol.Result{Type: "result", OK: true})
+		return
+	}
+	if !exists || share.PeerDeviceID != hello.DeviceID || share.State != "pending" {
+		_ = writeError(framer, "share", "没有对应的待处理同步空间")
 		return
 	}
 	share.State = "active"

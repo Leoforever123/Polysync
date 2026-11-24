@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"polysync/internal/model"
 	"polysync/internal/service"
 	"polysync/internal/store"
 )
@@ -227,5 +228,63 @@ func TestWorkspaceRoleAndMemberBridge(t *testing.T) {
 	}
 	if allowed("GET", "/api/shares/abc/members") {
 		t.Fatal("unexpected method")
+	}
+}
+
+func TestAdditionalInvitationReusesMobileWorkspace(t *testing.T) {
+	a, b, c := testEngine(t), testEngine(t), testEngine(t)
+	engines := []*Engine{a, b, c}
+	id := func(e *Engine) string { return e.svc.Store().Config().DeviceID }
+	for _, local := range engines {
+		for _, peer := range engines {
+			if local == peer {
+				continue
+			}
+			cfg := peer.svc.Store().Config()
+			if err := local.svc.Store().SavePairedDevice(model.PairedDevice{ID: cfg.DeviceID, Name: cfg.DeviceName,
+				PublicKey: cfg.IdentityPublicKey, Addresses: []string{fmt.Sprintf("127.0.0.1:%d", peer.svc.ListenPort())}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	response, err := a.CreateWorkspaceWithRole("文档", id(b), "", "collaborator", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var group model.Share
+	if err := json.Unmarshal([]byte(response), &group); err != nil {
+		t.Fatal(err)
+	}
+	accept := func(node *Engine) {
+		t.Helper()
+		invites := node.svc.ShareInvitations()
+		if len(invites) != 1 {
+			t.Fatalf("expected one invitation: %+v", invites)
+		}
+		if _, err := node.CreateWorkspace("文档", "", invites[0].ID); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, func() bool { return !node.HasActiveWork() })
+	}
+	add := func(from, to *Engine) {
+		t.Helper()
+		payload, _ := json.Marshal(map[string]any{"deviceId": id(to), "role": "collaborator"})
+		if _, err := from.Request("POST", "/api/shares/"+group.ID+"/members", string(payload)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	accept(b)
+	root, err := b.workspace(group.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	add(a, c)
+	accept(c)
+	add(c, b)
+	accept(b)
+	entries, err := os.ReadDir(filepath.Join(b.dir, "workspaces"))
+	stored, exists := b.svc.Store().Share(group.ID)
+	if err != nil || len(entries) != 1 || !exists || stored.Path != root || len(stored.Members) != 2 {
+		t.Fatalf("mobile roots or memberships changed: %v / %+v / %v", entries, stored, err)
 	}
 }

@@ -50,7 +50,7 @@ func observeGroup(state *model.GroupState, files map[string]model.Entry, device 
 		}
 		clock[device]++
 		e.Path = name
-		state.Records[name] = model.GroupRevision{Entry: e, Clock: clock}
+		state.Records[name] = model.GroupRevision{Entry: e, Clock: clock, ConflictOrigin: old.ConflictOrigin}
 		return nil
 	}
 	for name, e := range files {
@@ -77,12 +77,15 @@ func dominates(a, b map[string]uint64) bool {
 	return true
 }
 
-func validateGroupRecords(records model.Revisions) error {
+func validateGroupOffer(records model.Revisions, readOnly bool) error {
+	if readOnly && len(records) > 0 {
+		return errors.New("此跟随设备仅有接收权限")
+	}
 	for name, rev := range records {
 		if err := syncer.ValidateRelativePath(name); err != nil {
 			return err
 		}
-		if name != rev.Path || rev.Size < 0 || rev.Size > 16<<30 || len(rev.Clock) == 0 || len(rev.Clock) > 1024 {
+		if (rev.ConflictOrigin != "" && len(rev.ConflictOrigin) != sha256.Size*2) || name != rev.Path || rev.Size < 0 || rev.Size > 16<<30 || len(rev.Clock) == 0 || len(rev.Clock) > 1024 {
 			return errors.New("无效的文件版本记录")
 		}
 		for id, n := range rev.Clock {
@@ -151,21 +154,37 @@ func mergeGroup(local, remote model.Revisions) (model.Revisions, []model.PlanCon
 		if other.Hash != "" {
 			detail.Kind = "modify-modify"
 			detail.ConflictCopyPath = groupConflictName(name, other.Hash)
-			other.Path = detail.ConflictCopyPath
-			extra[other.Path] = other
+			digest := sha256.Sum256([]byte(name + "\x00" + other.Hash))
+			other.ConflictOrigin = hex.EncodeToString(digest[:])
+			extra[name] = other
 		}
 		conflicts = append(conflicts, detail)
 	}
-	for name, rev := range extra {
-		if existing, ok := target[name]; ok {
-			if existing.Hash == rev.Hash || dominates(existing.Clock, rev.Clock) {
+	sort.Slice(conflicts, func(i, j int) bool { return conflicts[i].Path < conflicts[j].Path })
+	for i, conflict := range conflicts {
+		rev, ok := extra[conflict.Path]
+		if !ok {
+			continue
+		}
+		first := conflict.ConflictCopyPath
+		ext := path.Ext(first)
+		for attempt := 1; ; attempt++ {
+			name := first
+			if attempt > 1 {
+				name = fmt.Sprintf("%s-%d%s", strings.TrimSuffix(first, ext), attempt, ext)
+			}
+			existing, occupied := target[name]
+			if occupied && existing.ConflictOrigin != rev.ConflictOrigin {
 				continue
 			}
-			return nil, nil, fmt.Errorf("冲突副本名称已被使用：%s", name)
+			conflicts[i].ConflictCopyPath = name
+			if !occupied {
+				rev.Path = name
+				target[name] = rev
+			}
+			break
 		}
-		target[name] = rev
 	}
-	sort.Slice(conflicts, func(i, j int) bool { return conflicts[i].Path < conflicts[j].Path })
 	return target, conflicts, nil
 }
 

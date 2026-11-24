@@ -240,14 +240,14 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 		return err
 	}
 	files := revisionManifest(manifest)
-	state, err := s.store.GroupState(sh.ID)
+	state, err := s.store.GroupState(sh.ReplicaID)
 	if err != nil {
 		return err
 	}
-	if err = observeGroup(&state, files, self.DeviceID, !localRO); err != nil {
+	if err = observeGroup(&state, files, sh.ReplicaID, !localRO); err != nil {
 		return err
 	}
-	if err = s.store.SaveGroupState(sh.ID, state); err != nil {
+	if err = s.store.SaveGroupState(sh.ReplicaID, state); err != nil {
 		return err
 	}
 	if !localRO {
@@ -269,10 +269,7 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 	if err != nil {
 		return err
 	}
-	if peerRO && len(frame.Records) != 0 {
-		return errors.New("此跟随设备仅有接收权限")
-	}
-	if err = validateGroupRecords(frame.Records); err != nil {
+	if err = validateGroupOffer(frame.Records, peerRO); err != nil {
 		return err
 	}
 	if !client {
@@ -304,8 +301,8 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 	for n, rev := range desired {
 		// A follower may keep a private divergence until its upstream publishes
 		// a new revision. Private files are never advertised or requested.
-		prior, seen := state.Records[n]
-		if localRO && ((!seen && rev.Hash == "") || (prior.Hash == rev.Hash && dominates(prior.Clock, rev.Clock))) {
+		prior := state.Records[n]
+		if localRO && prior.Hash == rev.Hash {
 			continue
 		}
 		if rev.Hash == "" {
@@ -332,7 +329,7 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 	}
 
 	state.Pending = desired
-	if err = s.store.SaveGroupState(sh.ID, state); err != nil {
+	if err = s.store.SaveGroupState(sh.ReplicaID, state); err != nil {
 		return err
 	}
 	history := filepath.Join(s.store.Dir(), "history", sh.ID)
@@ -379,7 +376,7 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 	}
 	state.Records = desired
 	state.Pending = nil
-	if err = s.store.SaveGroupState(sh.ID, state); err != nil {
+	if err = s.store.SaveGroupState(sh.ReplicaID, state); err != nil {
 		return err
 	}
 	if client {

@@ -86,6 +86,9 @@ func (s *Service) editGroup(id string, change func(*model.Share, bool) error) (m
 	if err := change(&share, exists); err != nil {
 		return model.Share{}, err
 	}
+	if share.ReplicaID == "" {
+		share.ReplicaID = store.RandomID()
+	}
 	if err := s.checkTransferOverlap(share.Path); err != nil {
 		return model.Share{}, err
 	}
@@ -156,6 +159,7 @@ func (s *Service) inviteGroup(ctx context.Context, seed model.Share, member memb
 			return errors.New("这台设备已经在文件夹中")
 		}
 		sh.Members = append(sh.Members, model.ShareMember{DeviceID: dev.ID, State: "pending", Role: member.Role, AllowWriteBack: member.AllowWriteBack, InvitationID: id, Address: address})
+		sh.RefreshMembers()
 		return nil
 	})
 	if err != nil {
@@ -215,7 +219,8 @@ func (s *Service) handleGroupInvite(conn *tls.Conn, f *protocol.Framer, hello pr
 		if m, ok := shareMember(sh, dev.ID); ok && m.InvitationID == req.ID && m.State == "active" {
 			return f.WriteJSON(protocol.Result{Type: "result", OK: true})
 		}
-		if sh.LocalRole == model.RoleFollower || req.Role != model.RoleCollaborator || sh.State == "unpaired" {
+		_, samePeer := shareMember(sh, dev.ID)
+		if sh.State == "unpaired" || (sh.LocalRole != "" && sh.LocalRole != req.Role) || (sh.LocalRole == model.RoleFollower && len(sh.Members) > 0 && !samePeer) || (sh.LocalRole == "" && req.Role != model.RoleCollaborator) {
 			return errors.New("跟随设备只能连接一个上游")
 		}
 	}
@@ -250,7 +255,7 @@ func (s *Service) handleGroupAccept(conn *tls.Conn, f *protocol.Framer, hello pr
 				if m.DeviceID == dev.ID && m.InvitationID == req.ID {
 					sh.Members[i].State = "active"
 					sh.Members[i].Address = remoteAddress(conn.RemoteAddr(), hello.ListenPort)
-					sh.State = "active"
+					sh.RefreshMembers()
 					return nil
 				}
 			}
@@ -286,17 +291,25 @@ func (s *Service) acceptGroup(ctx context.Context, inv model.ShareInvitation, di
 			if sh.State == "unpaired" || sh.LocalRole != inv.Role || filepath.Clean(sh.Path) != path {
 				return errors.New("邀请与本机已有文件夹角色不一致")
 			}
-			if m, ok := shareMember(*sh, device.ID); ok {
-				if m.InvitationID == inv.ID && m.AllowWriteBack == inv.AllowWriteBack {
+			for i, m := range sh.Members {
+				if m.DeviceID != device.ID {
+					continue
+				}
+				if m.InvitationID == inv.ID {
 					return nil
 				}
-				return errors.New("已存在来自这台设备的连接")
+				// The user explicitly accepted a new grant from the same peer.
+				// Old follower changes still need a preview before any writeback.
+				sh.Members = append(sh.Members[:i], sh.Members[i+1:]...)
+				break
 			}
-			if sh.LocalRole == model.RoleFollower {
+			if sh.LocalRole == model.RoleFollower && len(sh.Members) > 0 {
 				return errors.New("跟随设备已有上游")
 			}
 		}
-		sh.Members = append(sh.Members, model.ShareMember{DeviceID: device.ID, Role: model.RoleCollaborator, AllowWriteBack: inv.AllowWriteBack, Address: inv.Address, State: "pending", InvitationID: inv.ID})
+		needsPreview := exists && inv.Role == model.RoleFollower && inv.AllowWriteBack
+		sh.Members = append(sh.Members, model.ShareMember{DeviceID: device.ID, Role: model.RoleCollaborator, AllowWriteBack: inv.AllowWriteBack && !needsPreview, WriteBackPending: needsPreview, Address: inv.Address, State: "pending", InvitationID: inv.ID})
+		sh.RefreshMembers()
 		return nil
 	})
 	if err != nil {
@@ -310,7 +323,7 @@ func (s *Service) acceptGroup(ctx context.Context, inv model.ShareInvitation, di
 			for i, m := range sh.Members {
 				if m.DeviceID == device.ID && m.InvitationID == inv.ID {
 					sh.Members[i].State = "active"
-					sh.State = "active"
+					sh.RefreshMembers()
 					return nil
 				}
 			}

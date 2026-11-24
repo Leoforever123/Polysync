@@ -100,14 +100,7 @@ func (s *Service) handleGroupMemberChange(w http.ResponseWriter, r *http.Request
 			}
 			if r.Method == http.MethodDelete {
 				sh.Members = slices.Delete(sh.Members, i, i+1)
-				if len(sh.Members) == 0 {
-					sh.PeerAddress = ""
-					sh.PeerDeviceID = ""
-					sh.State = "disconnected"
-				} else if sh.PeerDeviceID == peer {
-					sh.PeerDeviceID = sh.Members[0].DeviceID
-					sh.PeerAddress = sh.Members[0].Address
-				}
+				sh.RefreshMembers()
 				return nil
 			}
 			if sh.LocalRole != model.RoleCollaborator || m.Role != model.RoleFollower || m.State != "active" {
@@ -145,7 +138,7 @@ func (s *Service) previewWriteBack(ctx context.Context, sh model.Share) (writeBa
 	if sh.LocalRole != model.RoleFollower || len(sh.Members) != 1 || !sh.Members[0].WriteBackPending {
 		return out, errors.New("没有待确认的回传授权")
 	}
-	state, err := s.store.GroupState(sh.ID)
+	state, err := s.store.GroupState(sh.ReplicaID)
 	if err != nil {
 		return out, err
 	}

@@ -157,8 +157,13 @@ func (s *Store) DeleteShare(id string) error {
 	defer s.mu.Unlock()
 	for i := range s.config.Shares {
 		if s.config.Shares[i].ID == id {
+			previous := cloneConfig(s.config)
 			s.config.Shares = append(s.config.Shares[:i], s.config.Shares[i+1:]...)
-			return s.saveLocked()
+			if err := s.saveLocked(); err != nil {
+				s.config = previous
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("share %q not found", id)
@@ -237,13 +242,15 @@ func (s *Store) RemovePairedDevice(id string) error {
 							kept = append(kept, m)
 						}
 					}
+					if len(kept) == len(space.Members) {
+						continue
+					}
 					space.Members = kept
 					if len(kept) == 0 {
 						space.State = "unpaired"
 						space.AutoSync = false
-					} else if space.PeerDeviceID == id {
-						space.PeerDeviceID = kept[0].DeviceID
-						space.PeerAddress = kept[0].Address
+					} else {
+						space.RefreshMembers()
 					}
 				} else if s.config.Shares[j].PeerDeviceID == id {
 					s.config.Shares[j].State = "unpaired"
