@@ -74,7 +74,7 @@ const server = http.createServer((req, res) => {
       assert.equal(await android.isVisible(), true);
       assert.match(await android.getAttribute('href'), /polysync-android-arm64-preview\.apk$/);
       assert.match(await android.innerText(), /并装/);
-      assert.match(await page.locator('#android-note').innerText(), /重新配对.*旧应用导出/);
+      assert.match(await page.locator('#android-note').innerText(), /直接更新，保留配对和工作区.*重新配对.*旧应用导出/);
       assert.equal(await page.getByText(/卸载会删除该应用工作区中的文件/).isVisible(), true);
       await page.locator('summary').click();
       assert.equal(await page.getByText('桌面端更新：').isVisible(), false);

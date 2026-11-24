@@ -22,10 +22,10 @@ async function checkGroup() {
   const processes = [];
   const errors = [];
   let browser;
-  async function device(name) {
+  async function device(name, binary = process.env.POLYSYNC_TEST_BINARY) {
     const tcp = await port(), ui = await port();
     const address = "127.0.0.1:" + tcp;
-    const child = spawn(process.env.POLYSYNC_TEST_BINARY, ["-data-dir", path.join(dir, name + "-data"), "-listen", address,
+    const child = spawn(binary, ["-data-dir", path.join(dir, name + "-data"), "-listen", address,
       "-ui", "127.0.0.1:" + ui, "-open=false", "-tray=false"], {stdio: "ignore"});
     processes.push(child);
     const base = "http://127.0.0.1:" + ui;
@@ -57,7 +57,7 @@ async function checkGroup() {
   }
   try {
     browser = await chromium.launch({channel:process.env.POLYSYNC_TEST_BROWSER_CHANNEL || "chrome"});
-    const a = await device("A"), b = await device("B"), c = await device("C");
+    const a = await device("A"), b = await device("B", process.env.POLYSYNC_TEST_COLLABORATOR_BINARY), c = await device("C");
     for (const peer of [a,b,c]) {
       await fs.mkdir(peer.folder);
       const status = await (await peer.page.request.get(new URL("/api/status", peer.page.url()).href)).json();

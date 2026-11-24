@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -140,14 +141,38 @@ func (s *Store) UpdateShare(share model.Share) error {
 	return fmt.Errorf("share %q not found", share.ID)
 }
 
-func (s *Store) SetPeerAddress(id, address string) error {
+// SetPeerAddress updates only the authenticated legacy connection, preserving
+// settings and other members that may have changed since the handshake.
+func (s *Store) SetPeerAddress(id, deviceID, address string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i := range s.config.Shares {
-		if s.config.Shares[i].ID == id {
-			s.config.Shares[i].PeerAddress = address
-			return s.saveLocked()
+	for i, share := range s.config.Shares {
+		if share.ID != id {
+			continue
 		}
+		if share.LocalRole != "" {
+			member := slices.IndexFunc(share.Members, func(m model.ShareMember) bool {
+				return m.DeviceID == deviceID && m.Legacy && m.State == "active"
+			})
+			if member < 0 {
+				return errors.New("该旧版连接已断开")
+			}
+			share.Members = slices.Clone(share.Members)
+			share.Members[member].Address = address
+			share.RefreshMembers()
+		} else {
+			if share.PeerDeviceID != deviceID {
+				return errors.New("设备不属于此同步文件夹")
+			}
+			share.PeerAddress = address
+		}
+		previous := s.config.Shares[i]
+		s.config.Shares[i] = share
+		if err := s.saveLocked(); err != nil {
+			s.config.Shares[i] = previous
+			return err
+		}
+		return nil
 	}
 	return fmt.Errorf("share %q not found", id)
 }

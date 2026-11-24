@@ -182,7 +182,10 @@ func (s *Service) handleShareAccept(connection *tls.Conn, framer *protocol.Frame
 				for i, m := range sh.Members {
 					if m.Legacy && m.DeviceID == hello.DeviceID && m.InvitationID == request.ID {
 						sh.Members[i].State = "active"
-						sh.State = "active"
+						if address := remoteAddress(connection.RemoteAddr(), hello.ListenPort); address != "" {
+							sh.Members[i].Address = address
+						}
+						sh.RefreshMembers()
 						return nil
 					}
 				}

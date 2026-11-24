@@ -439,24 +439,29 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 }
 
 func (s *Service) learnPeer(share model.Share, hello protocol.Hello, remote net.Addr) {
-	address, ok := remote.(*net.TCPAddr)
-	if !ok || hello.ListenPort <= 0 || hello.ListenPort > 65535 {
+	peer := remoteAddress(remote, hello.ListenPort)
+	if peer == "" {
 		return
 	}
-	peer := net.JoinHostPort(address.IP.String(), fmt.Sprintf("%d", hello.ListenPort))
 	if device, exists := s.store.PairedDevice(hello.DeviceID); exists {
 		device.Name = hello.DeviceName
 		device.Addresses = []string{peer}
 		device.LastSeen = time.Now()
 		_ = s.store.SavePairedDevice(device)
 	}
-	if share.LocalRole != "" || share.PeerAddress == peer {
+	if share.LocalRole != "" {
+		m, ok := shareMember(share, hello.DeviceID)
+		if !ok || m.Address == peer {
+			return
+		}
+	} else if share.PeerAddress == peer {
 		return
 	}
-	share.PeerAddress = peer
-	if err := s.store.SetPeerAddress(share.ID, peer); err == nil {
-		s.log("info", share.ID, "已记住对端地址 "+peer)
+	if err := s.store.SetPeerAddress(share.ID, hello.DeviceID, peer); err != nil {
+		s.log("warning", share.ID, "保存对端地址失败："+err.Error())
+		return
 	}
+	s.log("info", share.ID, "已记住对端地址 "+peer)
 }
 
 func (s *Service) syncFailed(shareID string, err error) error {

@@ -78,7 +78,7 @@ async function refreshRelease() {
       if (element.dataset.platform === "android" && assets.has("polysync-android-arm64-preview.apk")) {
         name = "polysync-android-arm64-preview.apk";
         element.querySelector("small").textContent = "Android 10+ · ARM64 · 可与 dev.4 并装";
-        document.querySelector("#android-note").textContent = "首次打开需重新配对。旧工作区留在原应用中，需要的文件可从旧应用导出。";
+        document.querySelector("#android-note").textContent = "已安装预览版可以直接更新，保留配对和工作区。使用 dev.4 的设备需重新配对，需要的文件可从旧应用导出。";
       }
       const url = assets.get(name);
       if (!url) {
