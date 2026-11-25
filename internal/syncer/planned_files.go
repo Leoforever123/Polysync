@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,10 +55,12 @@ func applyPlannedFile(ctx context.Context, root *os.Root, relative, historyRoot,
 	if err := archiveExisting(ctx, root, relative, historyRoot, scannedHash); err != nil {
 		return err
 	}
-	return applyArchivedFile(ctx, root, relative, scannedHash, staged, historyRoot)
+	return applyArchivedFile(ctx, root, relative, scannedHash, staged, historyRoot, hashReader)
 }
 
-func applyArchivedFile(ctx context.Context, root *os.Root, relative, scannedHash, staged, historyRoot string) error {
+type claimHasher func(context.Context, io.Reader) (string, int64, error)
+
+func applyArchivedFile(ctx context.Context, root *os.Root, relative, scannedHash, staged, historyRoot string, hash claimHasher) error {
 	target := filepath.FromSlash(relative)
 	if err := checkRoot(ctx); err != nil {
 		return err
@@ -85,7 +88,7 @@ func applyArchivedFile(ctx context.Context, root *os.Root, relative, scannedHash
 
 	// Verify the file we actually moved. A save can replace the name at any
 	// point during archiving, even with identical size and modification time.
-	info, err := verifyClaim(ctx, root, claimed, relative, scannedHash)
+	info, err := verifyClaim(ctx, root, claimed, relative, scannedHash, hash)
 	if err != nil {
 		return restoreClaim(root, claimed, target, err)
 	}
@@ -114,7 +117,7 @@ func applyArchivedFile(ctx context.Context, root *os.Root, relative, scannedHash
 	return retainClaim(root, claimed, relative, historyRoot, info)
 }
 
-func verifyClaim(ctx context.Context, root *os.Root, claimed, relative, scannedHash string) (os.FileInfo, error) {
+func verifyClaim(ctx context.Context, root *os.Root, claimed, relative, scannedHash string, hash claimHasher) (os.FileInfo, error) {
 	info, err := root.Lstat(claimed)
 	if err != nil {
 		return nil, err
@@ -127,7 +130,7 @@ func verifyClaim(ctx context.Context, root *os.Root, claimed, relative, scannedH
 		return nil, err
 	}
 	defer file.Close()
-	digest, _, err := hashReader(ctx, file)
+	digest, _, err := hash(ctx, file)
 	if err != nil {
 		return nil, err
 	}

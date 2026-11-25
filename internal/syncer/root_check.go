@@ -21,10 +21,10 @@ func WithRootCheck(ctx context.Context, dir *os.Root, check func() error) contex
 }
 
 func checkRoot(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if volume, ok := ctx.Value(rootCheckKey{}).(workingVolume); ok {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
 		return volume.check()
 	}
 	return nil

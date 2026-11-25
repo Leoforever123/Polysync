@@ -1,8 +1,10 @@
 package syncer
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,15 +31,14 @@ func TestSaveAtVacatedNameCanRescan(t *testing.T) {
 				}
 			}
 			saved := false
-			ctx := claimReadContext{Context: t.Context(), beforeRead: func() {
-				if !saved {
-					saved = true
-					if err := os.WriteFile(target, []byte("just saved"), 0o600); err != nil {
-						t.Fatal(err)
-					}
+			hash := func(ctx context.Context, file io.Reader) (string, int64, error) {
+				if err := os.WriteFile(target, []byte("just saved"), 0o600); err != nil {
+					t.Fatal(err)
 				}
-			}}
-			if err := applyArchivedFile(ctx, openTestRoot(t, root), "notes", original, staged, t.TempDir()); !saved || err == nil {
+				saved = true
+				return hashReader(ctx, file)
+			}
+			if err := applyArchivedFile(t.Context(), openTestRoot(t, root), "notes", original, staged, t.TempDir(), hash); !saved || err == nil {
 				t.Fatalf("expected the concurrent save to abort the plan: %v", err)
 			}
 			entries, err := Scan(t.Context(), root)
@@ -75,7 +76,7 @@ func TestFileSavedAfterArchiveIsRestored(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := applyArchivedFile(t.Context(), openTestRoot(t, root), "notes", scanned, staged, t.TempDir()); err == nil {
+			if err := applyArchivedFile(t.Context(), openTestRoot(t, root), "notes", scanned, staged, t.TempDir(), hashReader); err == nil {
 				t.Fatal("committed a stale plan after archiving")
 			}
 			data, err := os.ReadFile(target)

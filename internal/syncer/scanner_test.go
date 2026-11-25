@@ -62,6 +62,16 @@ func TestScanRejectsFileReplacedAfterDirectoryWalk(t *testing.T) {
 	}
 }
 
+type scanReadContext struct {
+	context.Context
+	beforeRead func()
+}
+
+func (c scanReadContext) Err() error {
+	c.beforeRead()
+	return c.Context.Err()
+}
+
 func TestScanRejectsGrowthWhileHashing(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "notes")
@@ -79,7 +89,7 @@ func TestScanRejectsGrowthWhileHashing(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	ctx := claimReadContext{Context: t.Context(), beforeRead: change}
+	ctx := scanReadContext{Context: t.Context(), beforeRead: change}
 	dir, err := os.OpenRoot(root)
 	if err != nil {
 		t.Fatal(err)

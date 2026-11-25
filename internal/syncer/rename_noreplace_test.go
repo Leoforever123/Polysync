@@ -13,7 +13,7 @@ func TestRenameNoReplace(t *testing.T) {
 		move func(*os.Root, string, string) error
 	}{
 		{"native or fallback", func(dir *os.Root, from, to string) error { return renameNoReplace(dir, from, dir, to) }},
-		{"link fallback", linkNoReplace},
+		{"link fallback", func(dir *os.Root, from, to string) error { return renameOrLink(dir, from, dir, to, unsupportedRename) }},
 	} {
 		t.Run(method.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -70,7 +70,8 @@ func TestLinkNoReplaceRejectsDirectory(t *testing.T) {
 	if err := os.Mkdir(source, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := linkNoReplace(openTestRoot(t, root), "source", "published"); !errors.Is(err, errors.ErrUnsupported) {
+	dir := openTestRoot(t, root)
+	if err := renameOrLink(dir, "source", dir, "published", unsupportedRename); !errors.Is(err, errors.ErrUnsupported) {
 		t.Fatalf("publishing directory: %v", err)
 	}
 	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
@@ -78,5 +79,47 @@ func TestLinkNoReplaceRejectsDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(source); err != nil {
 		t.Fatalf("source after failed publication: %v", err)
+	}
+}
+
+func unsupportedRename(*os.File, string, *os.File, string) error { return errors.ErrUnsupported }
+
+func TestLinkFallbackToSeparateHistoryRootPreservesIdentity(t *testing.T) {
+	source, history := openTestRoot(t, t.TempDir()), openTestRoot(t, t.TempDir())
+	for _, root := range []*os.Root{source, history} {
+		if err := root.Mkdir("nested", 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	original := filepath.Join("nested", "claimed")
+	retained := filepath.Join("nested", "retained")
+	if err := source.WriteFile(original, []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := source.Stat(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := history.WriteFile(retained, []byte("already saved"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := renameOrLink(source, original, history, retained, unsupportedRename); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("expected an existing history file to block the link: %v", err)
+	}
+	if data, err := history.ReadFile(retained); err != nil || string(data) != "already saved" {
+		t.Fatalf("overwrote existing file: %q, %v", data, err)
+	}
+	if err := history.Remove(retained); err != nil {
+		t.Fatal(err)
+	}
+	if err := renameOrLink(source, original, history, retained, unsupportedRename); err != nil {
+		t.Fatal(err)
+	}
+	after, err := history.Stat(retained)
+	if err != nil || !os.SameFile(before, after) {
+		t.Fatalf("history lost the original file identity: %v", err)
+	}
+	if _, err := source.Lstat(original); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("private source name after move: %v", err)
 	}
 }
