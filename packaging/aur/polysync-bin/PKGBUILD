@@ -1,6 +1,6 @@
 # AUR publication pending: configure a maintainer account.
 pkgname=polysync-bin
-pkgver=0.5.2
+pkgver=0.5.3
 pkgrel=1
 pkgdesc='Personal LAN file synchronization and transfer'
 arch=('x86_64')
@@ -22,7 +22,7 @@ sha256sums=('14c351ae454be46215b9ee22ec6a8fadbed27a271ad80b52f928f42cd6e65b84'
             '82eb116a0075f2199f36ca9f6e41b7bcef4c857c10e744017e3891f59d56781c'
             '329bb87e320fe422c61420860b181a08d53eb25c0e705171fc15e00635cada0c')
 source_x86_64=("polysync-${pkgver}-linux-amd64::${url}/releases/download/v${pkgver}/polysync-linux-amd64")
-sha256sums_x86_64=('5290769962532793a2cd052fa9bc9eab85fd6abea9264d590a53e1b31df12226')
+sha256sums_x86_64=('b1942972bec2f15eafeeb505b84f7fab2646b9b77fcac1e7ce64d1f0c3eecead')
 noextract=("polysync-${pkgver}-linux-amd64")
 
 package() {

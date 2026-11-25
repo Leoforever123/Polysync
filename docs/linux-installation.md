@@ -35,7 +35,7 @@ makepkg -si
 
 候选配方在 `packaging/aur/polysync-bin/`，包含 `PKGBUILD`、makepkg 生成的 `.SRCINFO`、菜单启动器、用户服务和图标。仅支持 x86_64，提供 `polysync` 并声明与现有同名包冲突。程序从固定版本 GitHub Release 下载，以 SHA-256 校验；辅助文件直接随 AUR 配方提交。不会把二进制或本地缓存提交到 AUR。
 
-配方固定为 0.5.2 二进制。项目所有者选择保留所有权利，包标注为 `LicenseRef-Proprietary`，声明随包安装至 `/usr/share/licenses/polysync-bin/LICENSE`，不表示项目采用了开源许可证。AUR 推送仍需维护账户绑定 SSH 公钥。更换发布二进制后必须更新校验值并重测，不能使用 SKIP。
+配方固定为 0.5.3 二进制。项目所有者选择保留所有权利，包标注为 `LicenseRef-Proprietary`，声明随包安装至 `/usr/share/licenses/polysync-bin/LICENSE`，不表示项目采用了开源许可证。AUR 推送仍需维护账户绑定 SSH 公钥。更换发布二进制后必须更新校验值并重测，不能使用 SKIP。
 
 本地构建验收（需要上一节所述的 makepkg 工具环境）：
 
@@ -52,7 +52,7 @@ python3 tests/aur-packaging.integration.py
 python3 tests/aur-packaging.integration.py --download
 ```
 
-v0.5.2 已在 Arch Linux 从空缓存下载公开二进制，完成构建、桌面入口验证与损坏文件拒绝测试。正式发布到 AUR 时，再将上述候选目录的文件提交至 `ssh://aur@aur.archlinux.org/polysync-bin.git`，并再次查询 AUR、在干净 Arch 环境通过 yay 验证安装。目前所有者没有 AUR 账号，测试没有上传或创建包。
+v0.5.3 已在 Arch Linux 从空缓存下载公开二进制，完成构建、桌面入口验证与损坏文件拒绝测试。正式发布到 AUR 时，再将上述候选目录的文件提交至 `ssh://aur@aur.archlinux.org/polysync-bin.git`，并再次查询 AUR、在干净 Arch 环境通过 yay 验证安装。目前所有者没有 AUR 账号，测试没有上传或创建包。
 
 账号入口为 https://aur.archlinux.org/register 。2026-10-25 自动检查只返回 Anubis 验证页面，未能确认注册是否重新开放；官方邮件列表此前宣布暂停注册且没有人工开户通道。请本人在浏览器查看实际状态，注册可用时完成邮箱验证，再配置 SSH 公钥。若仍关闭，只能等待恢复或由已有账户的维护者自愿接手，不应把尚未发布的候选配方描述为可通过 yay 安装。
 

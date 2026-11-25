@@ -1,6 +1,6 @@
 pkgbase = polysync-bin
 	pkgdesc = Personal LAN file synchronization and transfer
-	pkgver = 0.5.2
+	pkgver = 0.5.3
 	pkgrel = 1
 	url = https://github.com/Leoforever123/Polysync
 	arch = x86_64
@@ -10,9 +10,9 @@ pkgbase = polysync-bin
 	optdepends = curl: wait for the local console before opening the browser
 	optdepends = zenity: native folder and save dialogs
 	optdepends = kdialog: alternative native folder and save dialogs
-	provides = polysync=0.5.2
+	provides = polysync=0.5.3
 	conflicts = polysync
-	noextract = polysync-0.5.2-linux-amd64
+	noextract = polysync-0.5.3-linux-amd64
 	options = !strip
 	options = !debug
 	source = polysync-open
@@ -27,7 +27,7 @@ pkgbase = polysync-bin
 	sha256sums = b183afe7580738024508c5ac22bdc00aab39c7ed9b84dce7e4a4445f4f97b8a6
 	sha256sums = 82eb116a0075f2199f36ca9f6e41b7bcef4c857c10e744017e3891f59d56781c
 	sha256sums = 329bb87e320fe422c61420860b181a08d53eb25c0e705171fc15e00635cada0c
-	source_x86_64 = polysync-0.5.2-linux-amd64::https://github.com/Leoforever123/Polysync/releases/download/v0.5.2/polysync-linux-amd64
-	sha256sums_x86_64 = 5290769962532793a2cd052fa9bc9eab85fd6abea9264d590a53e1b31df12226
+	source_x86_64 = polysync-0.5.3-linux-amd64::https://github.com/Leoforever123/Polysync/releases/download/v0.5.3/polysync-linux-amd64
+	sha256sums_x86_64 = b1942972bec2f15eafeeb505b84f7fab2646b9b77fcac1e7ce64d1f0c3eecead
 
 pkgname = polysync-bin
