@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"polysync/internal/model"
+	"polysync/internal/rootidentity"
 	"polysync/internal/store"
 	"polysync/internal/webui"
 )
@@ -316,6 +317,12 @@ func (s *Service) handleUpdateShare(writer http.ResponseWriter, request *http.Re
 	s.peerControlMu.RLock()
 	defer s.peerControlMu.RUnlock()
 	id := request.PathValue("id")
+	lock := s.lockFor(id)
+	if !lock.TryLock() {
+		writeAPIError(writer, http.StatusConflict, ErrBusy)
+		return
+	}
+	defer lock.Unlock()
 	share, exists := s.store.Share(id)
 	if !exists {
 		writeAPIError(writer, http.StatusNotFound, errors.New("同步文件夹不存在"))
@@ -392,7 +399,32 @@ func (s *Service) handleSyncShare(writer http.ResponseWriter, request *http.Requ
 		writeAPIError(writer, http.StatusBadRequest, errors.New("同步空间尚未被已配对设备接受"))
 		return
 	}
-	go func() { _ = s.SyncShare(s.ctx, id, true) }()
+	lock := s.lockFor(id)
+	if !lock.TryLock() {
+		writeAPIError(writer, http.StatusConflict, ErrBusy)
+		return
+	}
+	share, exists = s.store.Share(id)
+	if !exists || share.State != "active" {
+		lock.Unlock()
+		writeAPIError(writer, 409, errors.New("同步文件夹已变更"))
+		return
+	}
+	if err := s.checkLocalRoot(request.Context(), share, true); err != nil {
+		lock.Unlock()
+		writeAPIError(writer, http.StatusConflict, err)
+		return
+	}
+	if err := s.beginSyncWork(); err != nil {
+		lock.Unlock()
+		writeAPIError(writer, http.StatusConflict, err)
+		return
+	}
+	go func() {
+		defer s.endSyncWork()
+		defer lock.Unlock()
+		_ = s.syncShareLocked(s.ctx, share, true)
+	}()
 	writeJSON(writer, http.StatusAccepted, map[string]any{"ok": true})
 }
 
@@ -429,7 +461,19 @@ func (s *Service) preparePath(input, exceptID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(absolute, 0o755); err != nil {
+	if sh, ok := s.store.Share(exceptID); ok {
+		if filepath.Clean(sh.Path) == absolute {
+			return sh.Path, nil
+		}
+		// A moved sync directory must carry its original marker. A fresh
+		// folder needs a new invitation and starts with a new baseline.
+		if sh.RootID == "" || sh.LocalRole != "" {
+			return "", errors.New("更换同步目录请新建文件夹邀请")
+		}
+		if err := rootidentity.Check(absolute, sh.RootID); err != nil {
+			return "", errors.New("此位置不是原同步文件夹，更换目录请新建文件夹邀请")
+		}
+	} else if err := os.MkdirAll(absolute, 0o755); err != nil {
 		return "", fmt.Errorf("无法创建文件夹: %w", err)
 	}
 	info, err := os.Stat(absolute)

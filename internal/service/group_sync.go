@@ -17,6 +17,7 @@ import (
 )
 
 type groupFrame struct {
+	Code     string          `json:"code,omitempty"`
 	Resolved []string        `json:"resolved,omitempty"`
 	Type     string          `json:"type"`
 	Message  string          `json:"message,omitempty"`
@@ -30,8 +31,8 @@ func readGroup(f *protocol.Framer, stage string) (groupFrame, error) {
 		return frame, err
 	}
 	if frame.Type != stage {
-		if frame.Type == "result" && frame.Message != "" {
-			return frame, errors.New(frame.Message)
+		if frame.Type == "result" {
+			return frame, remoteError(responseFrame{Code: frame.Code, Message: frame.Message})
 		}
 		return frame, fmt.Errorf("文件夹同步阶段不一致，预期 %s", stage)
 	}
@@ -70,6 +71,9 @@ func (s *Service) syncGroup(ctx context.Context, group model.Share, manual bool)
 			err = s.dialGroup(ctx, group, member, peer)
 		}
 		if err != nil {
+			if errors.Is(err, errRootPaused) {
+				return s.syncFailed(group.ID, err)
+			}
 			failures = append(failures, fmt.Errorf("%s：%w", peer.Name, err))
 		} else {
 			count++
@@ -225,6 +229,12 @@ func (s *Service) fetchGroupObjects(ctx context.Context, f *protocol.Framer, req
 }
 
 func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model.Share, member model.ShareMember, peer model.PairedDevice, client bool) error {
+	ctx, volume, err := s.openVolume(ctx, sh)
+	if err != nil {
+		return err
+	}
+	defer volume.dir.Close()
+	s.clearRootPause(sh.ID)
 	state, err := s.checkedGroupState(sh)
 	if err != nil {
 		return err
@@ -243,7 +253,7 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 	if err != nil {
 		return err
 	}
-	manifest, err := syncer.Scan(ctx, sh.Path)
+	manifest, err := volume.scan(ctx)
 	if err != nil {
 		return err
 	}
@@ -259,11 +269,14 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 	if err = observeGroup(&state, files, sh.ReplicaID, !localRO); err != nil {
 		return err
 	}
+	if err = volume.check(); err != nil {
+		return err
+	}
 	if err = s.store.SaveGroupState(sh.ReplicaID, state); err != nil {
 		return err
 	}
 	if !localRO {
-		if err = s.cacheObjects(sh.Path, manifest); err != nil {
+		if err = s.cacheObjects(volume, manifest); err != nil {
 			return err
 		}
 	}
@@ -278,6 +291,9 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 		}
 	}
 	send := func() error {
+		if err := volume.check(); err != nil {
+			return err
+		}
 		return f.WriteJSON(groupFrame{Type: "group_offer", Records: offer, Resolved: resolutions})
 	}
 	if client {
@@ -358,6 +374,9 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 		return err
 	}
 
+	if err := volume.check(); err != nil {
+		return err
+	}
 	state.Pending = desired
 	if err = s.store.SaveGroupState(sh.ReplicaID, state); err != nil {
 		return err
@@ -392,7 +411,7 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 			return err
 		}
 	}
-	final, err := syncer.Scan(ctx, sh.Path)
+	final, err := volume.scan(ctx)
 	if err != nil {
 		return err
 	}
@@ -411,6 +430,9 @@ func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model
 		}
 	}
 	if err = s.saveGroupConflicts(sh, conflicts, model.PairedDevice{ID: self.DeviceID, Name: self.DeviceName}, peer); err != nil {
+		return err
+	}
+	if err := volume.check(); err != nil {
 		return err
 	}
 	state.Records = desired

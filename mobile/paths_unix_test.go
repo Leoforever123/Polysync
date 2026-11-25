@@ -5,6 +5,7 @@ package mobile
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"polysync/internal/model"
@@ -61,6 +62,20 @@ func TestWorkspaceExportThroughApplicationDirectoryAlias(t *testing.T) {
 	if _, err = e.WorkspaceExportPath("test", "import.txt"); err != nil {
 		t.Fatal(err)
 	}
+	list, err := e.WorkspaceFiles("test")
+	if err != nil || strings.Contains(list, ".polysync-backup-root-id-") {
+		t.Fatalf("listed root marker: %s, %v", list, err)
+	}
+	const reserved = ".polysync-backup-root-id-0123456789abcdef0123456789abcdef"
+	if err := e.ImportToWorkspace("test", "input", reserved); err == nil {
+		t.Fatal("import accepted a root marker name")
+	}
+	if err := os.WriteFile(filepath.Join(path, reserved), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.WorkspaceExportPath("test", reserved); err == nil {
+		t.Fatal("exported root marker")
+	}
 	outside := filepath.Join(dir, "outside.txt")
 	if err := os.WriteFile(outside, []byte("outside"), 0600); err != nil {
 		t.Fatal(err)
@@ -72,11 +87,20 @@ func TestWorkspaceExportThroughApplicationDirectoryAlias(t *testing.T) {
 		t.Fatal("export followed an escaping symlink")
 	}
 	linked := filepath.Join(alias, "workspaces", "linked")
-	if err = os.Symlink(filepath.Dir(outside), linked); err != nil {
+	if err = os.Mkdir(linked, 0700); err != nil {
 		t.Fatal(err)
 	}
 	if err = e.svc.Store().AddShare(model.Share{ID: "linked", Path: linked}); err != nil {
 		t.Fatal(err)
+	}
+	if err = os.Rename(linked, linked+"-original"); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(filepath.Dir(outside), linked); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.svc.Store().AddShare(model.Share{ID: "new-link", Path: linked}); err == nil {
+		t.Fatal("registered a symlink as a new sync root")
 	}
 	if _, err = e.WorkspaceFiles("linked"); err == nil {
 		t.Fatal("workspace root followed a symlink")

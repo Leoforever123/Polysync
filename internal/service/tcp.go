@@ -50,10 +50,18 @@ func (s *Service) SyncShare(ctx context.Context, shareID string, manual bool) er
 	if !exists {
 		return fmt.Errorf("sync folder not found")
 	}
+	return s.syncShareLocked(ctx, share, manual)
+}
+
+func (s *Service) syncShareLocked(ctx context.Context, share model.Share, manual bool) error {
 	if share.State == "unpaired" {
 		return errors.New("此同步已因取消配对而停用，请重新配对并创建同步邀请")
 	}
 
+	if err := s.checkLocalRoot(ctx, share, true); err != nil {
+		return err
+	}
+	s.clearRootPause(share.ID)
 	if share.LocalRole != "" {
 		return s.syncGroup(ctx, share, manual)
 	}
@@ -61,6 +69,11 @@ func (s *Service) SyncShare(ctx context.Context, shareID string, manual bool) er
 }
 
 func (s *Service) syncLegacyLocked(ctx context.Context, share model.Share, manual bool) error {
+	ctx, volume, err := s.openVolume(ctx, share)
+	if err != nil {
+		return err
+	}
+	defer volume.dir.Close()
 	shareID := share.ID
 	now := time.Now()
 	s.updateStatus(shareID, func(status *model.RuntimeStatus) {
@@ -117,15 +130,18 @@ func (s *Service) syncLegacyLocked(ctx context.Context, share model.Share, manua
 		status.Message = "正在扫描文件…"
 		status.PeerName = response.ServerDeviceName
 	})
-	manifest, err := syncer.Scan(ctx, share.Path)
+	manifest, err := volume.scan(ctx)
 	if err != nil {
 		return s.syncFailed(shareID, err)
 	}
-	if err := s.cacheObjects(share.Path, manifest); err != nil {
+	if err := s.cacheObjects(volume, manifest); err != nil {
 		return s.syncFailed(shareID, err)
 	}
 	request := protocol.SyncRequest{
 		Type: "sync_request", Manifest: manifest, ResolvedConflicts: s.resolvedConflictIDs(share.ID),
+	}
+	if err := volume.check(); err != nil {
+		return s.syncFailed(shareID, err)
 	}
 	if err := framer.WriteJSON(request); err != nil {
 		return s.syncFailed(shareID, err)
@@ -146,6 +162,9 @@ func (s *Service) syncLegacyLocked(ctx context.Context, share model.Share, manua
 		if err := syncer.SendFile(ctx, framer, share.Path, transfer); err != nil {
 			return s.syncFailed(shareID, err)
 		}
+	}
+	if err := volume.check(); err != nil {
+		return s.syncFailed(shareID, err)
 	}
 	if err := framer.WriteJSON(protocol.Marker{Type: "uploads_done"}); err != nil {
 		return s.syncFailed(shareID, err)
@@ -170,11 +189,11 @@ func (s *Service) syncLegacyLocked(ctx context.Context, share model.Share, manua
 		}
 		return s.syncFailed(shareID, err)
 	}
-	finalManifest, err := syncer.Scan(ctx, share.Path)
+	finalManifest, err := volume.scan(ctx)
 	if err != nil {
 		return s.syncFailed(shareID, err)
 	}
-	if err := s.cacheObjects(share.Path, finalManifest); err != nil {
+	if err := s.cacheObjects(volume, finalManifest); err != nil {
 		return s.syncFailed(shareID, err)
 	}
 	if err := s.savePlanConflicts(share, plan, false, config.DeviceName, pairedDevice.Name); err != nil {
@@ -189,6 +208,9 @@ func (s *Service) syncLegacyLocked(ctx context.Context, share model.Share, manua
 	}
 	if response.Type != "result" || !response.OK {
 		return s.syncFailed(shareID, remoteError(response))
+	}
+	if err := volume.check(); err != nil {
+		return s.syncFailed(shareID, err)
 	}
 	if err := s.store.SaveBaseline(share.ID, response.ServerDeviceID, finalManifest); err != nil {
 		return s.syncFailed(shareID, err)
@@ -238,7 +260,7 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 		}
 		defer s.endSyncWork()
 		if err := s.receiveGroup(ctx, connection, framer, hello); err != nil {
-			_ = writeError(framer, "group", err.Error())
+			_ = writeSyncError(framer, "group", err)
 		}
 		return
 	case "transfer":
@@ -303,6 +325,13 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 		return
 	}
 	_ = connection.SetDeadline(time.Now().Add(sessionTimeout))
+	ctx, volume, err := s.openVolume(ctx, share)
+	if err != nil {
+		_ = writeSyncError(framer, "scan", err)
+		return
+	}
+	defer volume.dir.Close()
+	s.clearRootPause(share.ID)
 	nonce := randomNonce()
 	config := s.store.Config()
 	if err := framer.WriteJSON(protocol.Challenge{
@@ -325,14 +354,14 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 		status.PeerName = hello.DeviceName
 		status.LastAttempt = time.Now()
 	})
-	serverManifest, err := syncer.Scan(ctx, share.Path)
+	serverManifest, err := volume.scan(ctx)
 	if err != nil {
-		_ = writeError(framer, "scan", err.Error())
+		_ = writeSyncError(framer, "scan", err)
 		s.syncFailed(share.ID, err)
 		return
 	}
-	if err := s.cacheObjects(share.Path, serverManifest); err != nil {
-		_ = writeError(framer, "objects", err.Error())
+	if err := s.cacheObjects(volume, serverManifest); err != nil {
+		_ = writeSyncError(framer, "objects", err)
 		s.syncFailed(share.ID, err)
 		return
 	}
@@ -344,13 +373,18 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 	}
 	plan := s.planSync(serverManifest, request.Manifest, baseline, hello.DeviceName, time.Now())
 	historyRoot := filepath.Join(s.store.Dir(), "history", share.ID)
+	if err := volume.check(); err != nil {
+		_ = writeSyncError(framer, "scan", err)
+		s.syncFailed(share.ID, err)
+		return
+	}
 	if err := framer.WriteJSON(protocol.PlanMessage{Type: "plan", Plan: plan, ResolvedConflicts: s.resolvedConflictIDs(share.ID)}); err != nil {
 		s.syncFailed(share.ID, err)
 		return
 	}
 	for _, transfer := range plan.ClientSends {
 		if err := syncer.ReceiveFile(ctx, framer, share.Path, historyRoot, transfer, scannedHash(serverManifest, transfer.Dest)); err != nil {
-			_ = writeError(framer, "receive", err.Error())
+			_ = writeSyncError(framer, "receive", err)
 			s.syncFailed(share.ID, err)
 			return
 		}
@@ -365,7 +399,7 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 	}
 	for _, filePath := range plan.ServerDeletes {
 		if err := syncer.DeletePlannedFile(ctx, share.Path, filePath, historyRoot, scannedHash(serverManifest, filePath)); err != nil {
-			_ = writeError(framer, "delete", err.Error())
+			_ = writeSyncError(framer, "delete", err)
 			s.syncFailed(share.ID, err)
 			return
 		}
@@ -388,14 +422,14 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 		s.syncFailed(share.ID, err)
 		return
 	}
-	finalManifest, err := syncer.Scan(ctx, share.Path)
+	finalManifest, err := volume.scan(ctx)
 	if err != nil {
-		_ = writeError(framer, "scan", err.Error())
+		_ = writeSyncError(framer, "scan", err)
 		s.syncFailed(share.ID, err)
 		return
 	}
-	if err := s.cacheObjects(share.Path, finalManifest); err != nil {
-		_ = writeError(framer, "objects", err.Error())
+	if err := s.cacheObjects(volume, finalManifest); err != nil {
+		_ = writeSyncError(framer, "objects", err)
 		s.syncFailed(share.ID, err)
 		return
 	}
@@ -407,6 +441,11 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 	if !manifestsEqual(finalManifest, ack.Manifest) {
 		err := errors.New("同步期间文件发生变化，将在下一轮重试")
 		_ = writeError(framer, "changed", err.Error())
+		s.syncFailed(share.ID, err)
+		return
+	}
+	if err := volume.check(); err != nil {
+		_ = writeSyncError(framer, "scan", err)
 		s.syncFailed(share.ID, err)
 		return
 	}
@@ -465,6 +504,15 @@ func (s *Service) learnPeer(share model.Share, hello protocol.Hello, remote net.
 }
 
 func (s *Service) syncFailed(shareID string, err error) error {
+	if errors.Is(err, errRootPaused) {
+		return s.noteRootPause(shareID, true, err)
+	}
+	if errors.Is(err, errRemoteRootPaused) {
+		s.updateStatus(shareID, func(status *model.RuntimeStatus) {
+			status.State, status.Message = "waiting", err.Error()
+		})
+		return err
+	}
 	s.updateStatus(shareID, func(status *model.RuntimeStatus) {
 		status.State = "error"
 		status.Message = err.Error()
@@ -495,7 +543,17 @@ func writeError(framer *protocol.Framer, code, message string) error {
 	return framer.WriteJSON(protocol.Result{Type: "result", OK: false, Code: code, Message: message})
 }
 
+func writeSyncError(framer *protocol.Framer, code string, err error) error {
+	if errors.Is(err, errRootPaused) {
+		return writeError(framer, "folder_paused", errRemoteRootPaused.Error())
+	}
+	return writeError(framer, code, err.Error())
+}
+
 func remoteError(response responseFrame) error {
+	if response.Code == "folder_paused" {
+		return errRemoteRootPaused
+	}
 	if response.Message == "" {
 		return errors.New("对端返回了未知错误")
 	}

@@ -18,8 +18,10 @@ import (
 
 	"polysync/internal/discovery"
 	"polysync/internal/model"
+	"polysync/internal/rootidentity"
 	"polysync/internal/service"
 	"polysync/internal/store"
+	"polysync/internal/syncer"
 )
 
 type Engine struct {
@@ -375,6 +377,12 @@ func (e *Engine) WorkspaceFiles(id string) (string, error) {
 		if err != nil {
 			return err
 		}
+		if p != path && rootidentity.Reserved(d.Name()) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if d.Type()&os.ModeSymlink != 0 {
 			return errors.New("工作区包含符号链接")
 		}
@@ -407,7 +415,7 @@ func (e *Engine) ImportToWorkspace(id, importName, displayName string) error {
 	if e.svc == nil {
 		return errors.New("服务未启动")
 	}
-	if !safeName(importName) || !safeName(displayName) {
+	if !safeName(importName) || !safeName(displayName) || rootidentity.Reserved(displayName) {
 		return errors.New("文件名无效")
 	}
 	path, err := e.workspace(id)
@@ -495,7 +503,7 @@ func (e *Engine) WorkspaceExportPath(id, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !filepath.IsLocal(name) {
+	if !filepath.IsLocal(name) || syncer.ValidateRelativePath(filepath.ToSlash(name)) != nil {
 		return "", errors.New("路径无效")
 	}
 	root, err := os.OpenRoot(path)
@@ -526,7 +534,7 @@ func (e *Engine) WorkspaceExportPath(id, name string) (string, error) {
 		return "", err
 	}
 	rel, err := filepath.Rel(canonicalRoot, actual)
-	if err != nil || !filepath.IsLocal(rel) {
+	if err != nil || !filepath.IsLocal(rel) || syncer.ValidateRelativePath(filepath.ToSlash(rel)) != nil {
 		return "", errors.New("路径越界")
 	}
 	return actual, nil

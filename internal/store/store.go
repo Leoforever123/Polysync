@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"polysync/internal/model"
+	"polysync/internal/rootidentity"
 )
 
 type Store struct {
@@ -109,6 +110,16 @@ func (s *Store) Share(id string) (model.Share, bool) {
 }
 
 func (s *Store) AddShare(share model.Share) error {
+	if _, exists := s.Share(share.ID); exists {
+		return fmt.Errorf("share %q already exists", share.ID)
+	}
+	if share.Path != "" {
+		id, err := rootidentity.Bind(share.Path)
+		if err != nil {
+			return fmt.Errorf("无法标记同步文件夹：%w", err)
+		}
+		share.RootID = id
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, existing := range s.config.Shares {
@@ -130,6 +141,8 @@ func (s *Store) UpdateShare(share model.Share) error {
 	for i := range s.config.Shares {
 		if s.config.Shares[i].ID == share.ID {
 			old := s.config.Shares[i]
+			// Ordinary settings and membership changes never adopt another disk.
+			share.RootID = old.RootID
 			s.config.Shares[i] = share
 			if err := s.saveLocked(); err != nil {
 				s.config.Shares[i] = old
@@ -139,6 +152,31 @@ func (s *Store) UpdateShare(share model.Share) error {
 		}
 	}
 	return fmt.Errorf("share %q not found", share.ID)
+}
+
+// BindMigratedRoot only fills the missing identity of the configuration we verified.
+func (s *Store) BindMigratedRoot(id, path, rootID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.config.Shares {
+		sh := &s.config.Shares[i]
+		if sh.ID != id || sh.Path != path {
+			continue
+		}
+		if sh.RootID == rootID {
+			return nil
+		}
+		if sh.RootID != "" {
+			return errors.New("文件夹身份已更新")
+		}
+		sh.RootID = rootID
+		if err := s.saveLocked(); err != nil {
+			sh.RootID = ""
+			return err
+		}
+		return nil
+	}
+	return errors.New("同步文件夹已变更")
 }
 
 // SetPeerAddress updates only the authenticated legacy connection, preserving
@@ -388,7 +426,7 @@ func (s *Store) Conflict(id string) (model.Conflict, bool, error) {
 	return model.Conflict{}, false, nil
 }
 
-func (s *Store) PutObject(root string, entry model.Entry) error {
+func (s *Store) PutObject(root *os.Root, entry model.Entry) error {
 	if !validObjectHash(entry.Hash) {
 		return errors.New("invalid object hash")
 	}
@@ -399,8 +437,7 @@ func (s *Store) PutObject(root string, entry model.Entry) error {
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return err
 	}
-	source := filepath.Join(root, filepath.FromSlash(entry.Path))
-	input, err := os.Open(source)
+	input, err := root.Open(filepath.FromSlash(entry.Path))
 	if err != nil {
 		return err
 	}

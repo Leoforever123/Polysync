@@ -11,7 +11,6 @@ import (
 
 	"polysync/internal/model"
 	"polysync/internal/protocol"
-	"polysync/internal/syncer"
 )
 
 type groupPolicy struct {
@@ -142,7 +141,12 @@ func (s *Service) previewWriteBack(ctx context.Context, sh model.Share) (writeBa
 	if err != nil {
 		return out, err
 	}
-	scan, err := syncer.Scan(ctx, sh.Path)
+	ctx, volume, err := s.openVolume(ctx, sh)
+	if err != nil {
+		return out, err
+	}
+	defer volume.dir.Close()
+	scan, err := volume.scan(ctx)
 	if err != nil {
 		return out, err
 	}

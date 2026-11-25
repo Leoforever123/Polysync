@@ -63,13 +63,22 @@ func Recent(folders []Folder, limit int) []Folder {
 	return result
 }
 
-func (f Folder) CanSync() bool { return f.Active && f.State != "syncing" }
+func (f Folder) CanSync() bool { return f.Active && f.State != "syncing" && f.State != "paused" }
 func (f Folder) Status() string {
 	if !f.Active {
 		return "等待配对或接受邀请"
 	}
 	if f.State == "syncing" {
 		return "正在同步…"
+	}
+	if f.State == "waiting" && f.Message != "" {
+		return menuLabel(f.Message)
+	}
+	if f.State == "paused" {
+		if f.Message != "" {
+			return menuLabel(f.Message)
+		}
+		return "文件夹同步已暂停"
 	}
 	if f.State == "error" {
 		return "同步失败 · 请在控制台查看"

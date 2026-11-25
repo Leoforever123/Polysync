@@ -31,6 +31,11 @@ jobs:
       - run: go test -count=1 ./...
       - run: go vet ./...
       - if: runner.os == 'Linux'
+        name: Exercise hot unplug with two mounted volumes and two TLS peers
+        run: |
+          go test -c -o "$RUNNER_TEMP/volume-regression" ./internal/service
+          sudo unshare --mount --propagation private env POLYSYNC_TEST_REAL_MOUNTS=1 "$RUNNER_TEMP/volume-regression" -test.run TestExternalVolume -test.v
+      - if: runner.os == 'Linux'
         run: go test -race ./...
       - if: runner.os == 'Linux'
         run: node --test tests/ui.test.cjs tests/site.test.cjs

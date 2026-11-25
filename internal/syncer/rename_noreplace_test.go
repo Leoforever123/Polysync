@@ -10,13 +10,14 @@ import (
 func TestRenameNoReplace(t *testing.T) {
 	for _, method := range []struct {
 		name string
-		move func(string, string) error
+		move func(*os.Root, string, string) error
 	}{
-		{"native or fallback", renameNoReplace},
+		{"native or fallback", func(dir *os.Root, from, to string) error { return renameNoReplace(dir, from, dir, to) }},
 		{"link fallback", linkNoReplace},
 	} {
 		t.Run(method.name, func(t *testing.T) {
 			dir := t.TempDir()
+			root := openTestRoot(t, dir)
 			destination := filepath.Join(dir, "published")
 			// Two complete files race for one destination. The winner must be
 			// published whole and the losing source must remain available.
@@ -35,7 +36,7 @@ func TestRenameNoReplace(t *testing.T) {
 			for _, name := range names {
 				go func() {
 					<-start
-					results <- result{name, method.move(filepath.Join(dir, name), destination)}
+					results <- result{name, method.move(root, name, "published")}
 				}()
 			}
 			close(start)
@@ -69,7 +70,7 @@ func TestLinkNoReplaceRejectsDirectory(t *testing.T) {
 	if err := os.Mkdir(source, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := linkNoReplace(source, destination); !errors.Is(err, errors.ErrUnsupported) {
+	if err := linkNoReplace(openTestRoot(t, root), "source", "published"); !errors.Is(err, errors.ErrUnsupported) {
 		t.Fatalf("publishing directory: %v", err)
 	}
 	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {

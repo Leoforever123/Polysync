@@ -56,6 +56,7 @@ type ShareMember struct {
 }
 
 type Share struct {
+	RootID          string        `json:"rootId,omitempty"` // Local only. Never transmitted to peers.
 	ReplicaID       string        `json:"replicaId,omitempty"`
 	LocalRole       string        `json:"localRole,omitempty"`
 	Members         []ShareMember `json:"members,omitempty"`

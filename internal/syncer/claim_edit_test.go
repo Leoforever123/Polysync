@@ -74,7 +74,7 @@ func TestClaimRestoresEditToAlreadyHashedBytes(t *testing.T) {
 		}
 	}}
 	scannedHash := fmt.Sprintf("%x", sha256.Sum256(original))
-	err := applyArchivedFile(ctx, root, target, name, scannedHash, "", t.TempDir())
+	err := applyArchivedFile(ctx, openTestRoot(t, root), name, scannedHash, "", t.TempDir())
 	if checks < 2 || err == nil {
 		t.Fatalf("expected the deletion to stop after the edit, checks=%d, err=%v", checks, err)
 	}

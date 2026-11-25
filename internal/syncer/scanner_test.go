@@ -48,7 +48,12 @@ func TestScanRejectsFileReplacedAfterDirectoryWalk(t *testing.T) {
 	if err := os.WriteFile(target, content, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := scanRegularFile(t.Context(), target, "notes", observed); err == nil {
+	dir, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	if _, err := scanRegularFile(t.Context(), dir, "notes", observed); err == nil {
 		t.Fatal("accepted a replaced file with stale directory-entry metadata")
 	}
 	entries, err := Scan(t.Context(), root)
@@ -75,7 +80,12 @@ func TestScanRejectsGrowthWhileHashing(t *testing.T) {
 		}
 	})
 	ctx := claimReadContext{Context: t.Context(), beforeRead: change}
-	if _, err := scanRegularFile(ctx, target, "notes", before); err == nil {
+	dir, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	if _, err := scanRegularFile(ctx, dir, "notes", before); err == nil {
 		t.Fatal("accepted a digest for bytes of a different size")
 	}
 }

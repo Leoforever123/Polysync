@@ -18,13 +18,13 @@ func TestSaveAtVacatedNameCanRescan(t *testing.T) {
 				t.Fatal(err)
 			}
 			original := fmt.Sprintf("%x", sha256.Sum256([]byte("old")))
-			if err := archiveExisting(t.Context(), target, "notes", t.TempDir(), original); err != nil {
+			if err := archiveExisting(t.Context(), openTestRoot(t, root), "notes", t.TempDir(), original); err != nil {
 				t.Fatal(err)
 			}
 			var staged string
 			if operation == "replace" {
-				staged = filepath.Join(root, ".polysync-part-test")
-				if err := os.WriteFile(staged, []byte("incoming"), 0o600); err != nil {
+				staged = ".polysync-part-test"
+				if err := os.WriteFile(filepath.Join(root, staged), []byte("incoming"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -37,7 +37,7 @@ func TestSaveAtVacatedNameCanRescan(t *testing.T) {
 					}
 				}
 			}}
-			if err := applyArchivedFile(ctx, root, target, "notes", original, staged, t.TempDir()); !saved || err == nil {
+			if err := applyArchivedFile(ctx, openTestRoot(t, root), "notes", original, staged, t.TempDir()); !saved || err == nil {
 				t.Fatalf("expected the concurrent save to abort the plan: %v", err)
 			}
 			entries, err := Scan(t.Context(), root)
@@ -62,7 +62,7 @@ func TestFileSavedAfterArchiveIsRestored(t *testing.T) {
 				t.Fatal(manifest, err)
 			}
 			scanned := manifest[0].Hash
-			if err := archiveExisting(t.Context(), target, "notes", t.TempDir(), scanned); err != nil {
+			if err := archiveExisting(t.Context(), openTestRoot(t, root), "notes", t.TempDir(), scanned); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(target, []byte("new"), 0o600); err != nil {
@@ -70,12 +70,12 @@ func TestFileSavedAfterArchiveIsRestored(t *testing.T) {
 			}
 			var staged string
 			if operation == "replace" {
-				staged = filepath.Join(root, ".polysync-part-test")
-				if err := os.WriteFile(staged, []byte("peer"), 0o600); err != nil {
+				staged = ".polysync-part-test"
+				if err := os.WriteFile(filepath.Join(root, staged), []byte("peer"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if err := applyArchivedFile(t.Context(), root, target, "notes", scanned, staged, t.TempDir()); err == nil {
+			if err := applyArchivedFile(t.Context(), openTestRoot(t, root), "notes", scanned, staged, t.TempDir()); err == nil {
 				t.Fatal("committed a stale plan after archiving")
 			}
 			data, err := os.ReadFile(target)
@@ -108,7 +108,7 @@ func TestInterruptedCommitPreservesBothLocalSavesAndStopsScan(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := restoreClaim(claimed, target, changedTarget("notes")); err == nil || !strings.Contains(err.Error(), claimed) {
+	if err := restoreClaim(openTestRoot(t, root), filepath.Join(filepath.Base(temp), originalDirName, "notes"), "notes", changedTarget("notes")); err == nil || !strings.Contains(err.Error(), claimed) {
 		t.Fatalf("missing recovery location: %v", err)
 	}
 	for path, want := range map[string]string{target: "second save", claimed: "first save"} {

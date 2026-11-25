@@ -18,26 +18,31 @@ import (
 )
 
 func SendFile(ctx context.Context, framer *protocol.Framer, root string, transfer Transfer) error {
-	path, err := SecureJoin(root, transfer.Source)
+	dir, done, err := workingRoot(ctx, root)
 	if err != nil {
 		return err
 	}
-	if err := rejectSymlinkPath(root, path, false); err != nil {
+	defer done()
+	if err := ValidateRelativePath(transfer.Source); err != nil {
 		return err
 	}
-	info, err := os.Lstat(path)
+	path := filepath.FromSlash(transfer.Source)
+	if err := rejectSymlinkPath(dir, path, false); err != nil {
+		return err
+	}
+	info, err := dir.Lstat(path)
 	if err != nil {
 		return err
 	}
 	if !info.Mode().IsRegular() || info.Size() != transfer.Size {
 		return fmt.Errorf("source changed during sync: %s", transfer.Source)
 	}
-	file, err := os.Open(path)
+	file, err := dir.Open(path)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	if err := ctx.Err(); err != nil {
+	if err := checkRoot(ctx); err != nil {
 		return err
 	}
 	header := protocol.FileHeader{
@@ -70,26 +75,33 @@ func ReceiveFile(ctx context.Context, framer *protocol.Framer, root, historyRoot
 // InstallPlannedContent verifies both the incoming bytes and the scanned
 // destination. Folder groups and legacy connections use the same commit path.
 func InstallPlannedContent(ctx context.Context, root, historyRoot string, entry model.Entry, scannedHash string, copyTo func(io.Writer, int64) error) error {
-	destination, err := SecureJoin(root, entry.Path)
+	if err := checkRoot(ctx); err != nil {
+		return err
+	}
+	dir, done, err := workingRoot(ctx, root)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+	defer done()
+	if err := ValidateRelativePath(entry.Path); err != nil {
 		return err
 	}
-	if err := rejectSymlinkPath(root, destination, true); err != nil {
+	destination := filepath.FromSlash(entry.Path)
+	if err := dir.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(destination), ".polysync-part-*")
+	if err := rejectSymlinkPath(dir, destination, true); err != nil {
+		return err
+	}
+	tmpPath, tmp, err := createTemp(dir, filepath.Dir(destination), ".polysync-part-")
 	if err != nil {
 		return err
 	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
+	defer dir.Remove(tmpPath)
 
 	hash := sha256.New()
 	limited := io.MultiWriter(tmp, hash)
-	if err := ctx.Err(); err != nil {
+	if err := checkRoot(ctx); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -107,35 +119,53 @@ func InstallPlannedContent(ctx context.Context, root, historyRoot string, entry 
 	if got := hex.EncodeToString(hash.Sum(nil)); got != entry.Hash {
 		return fmt.Errorf("hash mismatch for %s", entry.Path)
 	}
-	if err := os.Chmod(tmpPath, os.FileMode(entry.Mode)&0o777); err != nil && !errors.Is(err, os.ErrPermission) {
+	if err := checkRoot(ctx); err != nil {
+		return err
+	}
+	if err := dir.Chmod(tmpPath, os.FileMode(entry.Mode)&0o777); err != nil && !errors.Is(err, os.ErrPermission) {
 		return err
 	}
 	modTime := time.Unix(0, entry.ModTime)
-	if err := os.Chtimes(tmpPath, modTime, modTime); err != nil {
+	if err := dir.Chtimes(tmpPath, modTime, modTime); err != nil {
 		return err
 	}
-	return applyPlannedFile(ctx, root, entry.Path, historyRoot, scannedHash, tmpPath)
+	return applyPlannedFile(ctx, dir, entry.Path, historyRoot, scannedHash, tmpPath)
 }
 
 func DeleteFile(root, relative, historyRoot string) error {
-	path, err := SecureJoin(root, relative)
+	return DeleteFileContext(context.Background(), root, relative, historyRoot)
+}
+
+func DeleteFileContext(ctx context.Context, root, relative, historyRoot string) error {
+	if err := checkRoot(ctx); err != nil {
+		return err
+	}
+	dir, done, err := workingRoot(ctx, root)
 	if err != nil {
 		return err
 	}
-	if err := rejectSymlinkPath(root, path, true); err != nil {
+	defer done()
+	if err := ValidateRelativePath(relative); err != nil {
 		return err
 	}
-	if err := archiveExisting(context.Background(), path, relative, historyRoot, ""); err != nil {
+	path := filepath.FromSlash(relative)
+	if err := rejectSymlinkPath(dir, path, true); err != nil {
 		return err
 	}
-	err = os.Remove(path)
+	if err := archiveExisting(ctx, dir, relative, historyRoot, ""); err != nil {
+		return err
+	}
+	if err := checkRoot(ctx); err != nil {
+		return err
+	}
+	err = dir.Remove(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	removeEmptyParents(root, filepath.Dir(path))
+	removeEmptyDirectories(dir, ".", filepath.Dir(path))
 	return nil
 }
 
@@ -149,26 +179,30 @@ func WriteResolvedStream(ctx context.Context, root, relative, historyRoot string
 	if size < 0 || size > 16<<30 {
 		return errors.New("invalid resolved file size")
 	}
-	if err := ctx.Err(); err != nil {
+	if err := checkRoot(ctx); err != nil {
 		return err
 	}
 
-	destination, err := SecureJoin(root, relative)
+	dir, done, err := workingRoot(ctx, root)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+	defer done()
+	if err := ValidateRelativePath(relative); err != nil {
 		return err
 	}
-	if err := rejectSymlinkPath(root, destination, true); err != nil {
+	destination := filepath.FromSlash(relative)
+	if err := dir.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(destination), ".polysync-part-*")
+	if err := rejectSymlinkPath(dir, destination, true); err != nil {
+		return err
+	}
+	tmpPath, tmp, err := createTemp(dir, filepath.Dir(destination), ".polysync-part-")
 	if err != nil {
 		return err
 	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
+	defer dir.Remove(tmpPath)
 	hash := sha256.New()
 	n, err := io.CopyBuffer(io.MultiWriter(tmp, hash), &contextReader{ctx: ctx, reader: io.LimitReader(input, size+1)}, make([]byte, 64<<10))
 	if err != nil {
@@ -179,7 +213,7 @@ func WriteResolvedStream(ctx context.Context, root, relative, historyRoot string
 		tmp.Close()
 		return errors.New("conflict object size or hash mismatch")
 	}
-	if err := ctx.Err(); err != nil {
+	if err := checkRoot(ctx); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -190,42 +224,45 @@ func WriteResolvedStream(ctx context.Context, root, relative, historyRoot string
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmpPath, mode&0o777); err != nil && !errors.Is(err, os.ErrPermission) {
+	if err := dir.Chmod(tmpPath, mode&0o777); err != nil && !errors.Is(err, os.ErrPermission) {
 		return err
 	}
-	if err := archiveExisting(ctx, destination, relative, historyRoot, ""); err != nil {
+	if err := archiveExisting(ctx, dir, relative, historyRoot, ""); err != nil {
 		return err
 	}
-	return replaceFile(tmpPath, destination)
+	if err := checkRoot(ctx); err != nil {
+		return err
+	}
+	return replaceFile(dir, tmpPath, destination)
 }
 
-func replaceFile(source, destination string) error {
-	if err := os.Rename(source, destination); err == nil {
+func replaceFile(dir *os.Root, source, destination string) error {
+	if err := dir.Rename(source, destination); err == nil {
 		return nil
 	}
-	backupFile, createErr := os.CreateTemp(filepath.Dir(destination), ".polysync-backup-*")
+	backup, backupFile, createErr := createTemp(dir, filepath.Dir(destination), ".polysync-backup-")
 	if createErr != nil {
 		return createErr
 	}
-	backup := backupFile.Name()
 	_ = backupFile.Close()
-	_ = os.Remove(backup)
-	if err := os.Rename(destination, backup); err != nil && !errors.Is(err, os.ErrNotExist) {
+	_ = dir.Remove(backup)
+	if err := dir.Rename(destination, backup); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.Rename(source, destination); err != nil {
-		_ = os.Rename(backup, destination)
+	if err := dir.Rename(source, destination); err != nil {
+		_ = dir.Rename(backup, destination)
 		return err
 	}
-	_ = os.Remove(backup)
+	_ = dir.Remove(backup)
 	return nil
 }
 
-func archiveExisting(ctx context.Context, source, relative, historyRoot, scannedHash string) error {
+func archiveExisting(ctx context.Context, root *os.Root, relative, historyRoot, scannedHash string) error {
 	if historyRoot == "" {
 		return nil
 	}
-	info, err := os.Lstat(source)
+	source := filepath.FromSlash(relative)
+	info, err := root.Lstat(source)
 	if errors.Is(err, os.ErrNotExist) {
 		if scannedHash != "" {
 			return changedTarget(relative)
@@ -245,7 +282,7 @@ func archiveExisting(ctx context.Context, source, relative, historyRoot, scanned
 	}
 	// Discard empty timestamp directories when a concurrent edit aborts the copy.
 	defer removeEmptyParents(historyRoot, filepath.Dir(destination))
-	input, err := os.Open(source)
+	input, err := root.Open(source)
 	if err != nil {
 		return err
 	}
@@ -280,20 +317,12 @@ func archiveExisting(ctx context.Context, source, relative, historyRoot, scanned
 	return os.Chtimes(destination, info.ModTime(), info.ModTime())
 }
 
-func rejectSymlinkPath(root, target string, allowMissingLeaf bool) error {
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return err
-	}
-	rel, err := filepath.Rel(rootAbs, target)
-	if err != nil {
-		return err
-	}
-	current := rootAbs
+func rejectSymlinkPath(root *os.Root, rel string, allowMissingLeaf bool) error {
+	current := "."
 	parts := strings.Split(rel, string(filepath.Separator))
 	for _, part := range parts {
 		current = filepath.Join(current, part)
-		info, err := os.Lstat(current)
+		info, err := root.Lstat(current)
 		if errors.Is(err, os.ErrNotExist) && allowMissingLeaf {
 			continue
 		}

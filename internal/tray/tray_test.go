@@ -29,6 +29,9 @@ func TestFolderActions(t *testing.T) {
 		{Folder{}, false, "等待配对或接受邀请"},
 		{Folder{Active: true}, true, "等待首次同步"},
 		{Folder{Active: true, State: "syncing"}, false, "正在同步…"},
+		{Folder{Active: true, State: "paused"}, false, "文件夹同步已暂停"},
+		{Folder{Active: true, State: "paused", Message: "请接回原磁盘 A&B", LastSync: time.Now()}, false, "请接回原磁盘 A&&B"},
+		{Folder{Active: true, State: "waiting", Message: "正在等待对端接回原盘"}, true, "正在等待对端接回原盘"},
 		{Folder{Active: true, State: "error"}, true, "同步失败 · 请在控制台查看"},
 	} {
 		if tc.f.CanSync() != tc.can || tc.f.Status() != tc.status {

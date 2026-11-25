@@ -38,13 +38,13 @@ func TestWriterHeldAcrossCommitCanStillSave(t *testing.T) {
 				}
 				var staged string
 				if operation == "overwrite" {
-					staged = filepath.Join(root, ".polysync-part-test")
-					if err := os.WriteFile(staged, []byte("peer"), 0600); err != nil {
+					staged = ".polysync-part-test"
+					if err := os.WriteFile(filepath.Join(root, staged), []byte("peer"), 0600); err != nil {
 						t.Fatal(err)
 					}
 				}
 				hash := fmt.Sprintf("%x", sha256.Sum256([]byte("old")))
-				err = applyPlannedFile(t.Context(), root, name, history, hash, staged)
+				err = applyPlannedFile(t.Context(), openTestRoot(t, root), name, history, hash, staged)
 				if err != nil {
 					// Windows editors may deny deletion sharing. In that case the
 					// old plan must stop and the open file must still own the name.

@@ -35,6 +35,8 @@ type Service struct {
 	mu                 sync.RWMutex
 	peerControlMu      sync.RWMutex // serializes unpair with pairing/share control operations
 	statuses           map[string]model.RuntimeStatus
+	rootRetry          map[string]bool // Paused local roots; true retries interrupted work on return.
+	migrationFailures  map[string]migrationFailure
 	activities         []model.Activity
 	locks              map[string]*sync.Mutex
 	planSync           func(server, client, baseline []model.Entry, clientName string, now time.Time) model.Plan
@@ -70,7 +72,7 @@ func NewWithOptions(dataStore *store.Store, options Options) *Service {
 		planSync:  syncer.BuildPlan,
 		options:   options,
 		ctx:       ctx, cancel: cancel, transfers: newTransferManager(dataStore.Dir()),
-		store: dataStore, statuses: make(map[string]model.RuntimeStatus), locks: make(map[string]*sync.Mutex),
+		migrationFailures: make(map[string]migrationFailure), rootRetry: make(map[string]bool), store: dataStore, statuses: make(map[string]model.RuntimeStatus), locks: make(map[string]*sync.Mutex),
 		pairingRequests: make(map[string]pendingPair), outboundPairs: make(map[string]outboundPair), shareInvitations: make(map[string]model.ShareInvitation),
 	}
 	for _, share := range dataStore.Config().Shares {
@@ -119,10 +121,8 @@ func (s *Service) Start(ctx context.Context) error {
 
 	s.wg.Add(1)
 	go s.acceptLoop(ctx)
-	if !s.options.DisableAutoSync {
-		s.wg.Add(1)
-		go s.autoLoop(ctx)
-	}
+	s.wg.Add(1)
+	go s.autoLoop(ctx)
 	return nil
 }
 
@@ -181,6 +181,8 @@ func (s *Service) RemoveShare(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.statuses, id)
+	delete(s.rootRetry, id)
+	delete(s.migrationFailures, id)
 	delete(s.locks, id)
 }
 
@@ -261,25 +263,7 @@ func (s *Service) autoLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			config := s.store.Config()
-			statuses := s.Statuses()
-			for _, share := range config.Shares {
-				if !share.AutoSync || share.State != "active" || share.PeerDeviceID == "" {
-					continue
-				}
-				interval := time.Duration(share.IntervalSeconds) * time.Second
-				if interval < 5*time.Second {
-					interval = 30 * time.Second
-				}
-				status := statuses[share.ID]
-				jitter := time.Duration(deviceJitter(config.DeviceID, share.ID)) * time.Millisecond
-				if !status.LastAttempt.IsZero() && time.Since(status.LastAttempt) < interval+jitter {
-					continue
-				}
-				go func(id string) {
-					_ = s.SyncShare(ctx, id, false)
-				}(share.ID)
-			}
+			s.checkSyncFolders(ctx)
 		}
 	}
 }

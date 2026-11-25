@@ -29,13 +29,16 @@ type ConflictContent struct {
 	Merged   string         `json:"merged,omitempty"`
 }
 
-func (s *Service) cacheObjects(root string, entries []model.Entry) error {
+func (s *Service) cacheObjects(volume *syncVolume, entries []model.Entry) error {
 	for _, entry := range entries {
-		if err := s.store.PutObject(root, entry); err != nil {
+		if err := s.store.PutObject(volume.dir, entry); err != nil {
+			if changed := volume.check(); changed != nil {
+				return changed
+			}
 			return fmt.Errorf("cache object %s: %w", entry.Path, err)
 		}
 	}
-	return nil
+	return volume.check()
 }
 
 func (s *Service) savePlanConflicts(share model.Share, plan model.Plan, localIsServer bool, localDevice, remoteDevice string) error {
@@ -196,18 +199,23 @@ func (s *Service) ResolveConflict(ctx context.Context, id, choice, merged string
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	ctx, volume, err := s.openVolume(ctx, share)
+	if err != nil {
+		return err
+	}
+	defer volume.dir.Close()
 	historyRoot := filepath.Join(s.store.Dir(), "history", share.ID)
 	// A stale group dialog must not overwrite an edit saved after the fork,
 	// including during a session that applied files but lost its final ack.
 	remove := func(path, expected string) error {
 		if conflict.GroupEvent == "" {
-			return syncer.DeleteFile(share.Path, path, historyRoot)
+			return syncer.DeleteFileContext(ctx, share.Path, path, historyRoot)
 		}
-		target, err := syncer.SecureJoin(share.Path, path)
+		err := syncer.ValidateRelativePath(path)
 		if err != nil {
 			return err
 		}
-		if _, err = os.Lstat(target); errors.Is(err, os.ErrNotExist) {
+		if _, err = volume.dir.Lstat(filepath.FromSlash(path)); errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return syncer.DeletePlannedFile(ctx, share.Path, path, historyRoot, expected)
@@ -267,6 +275,9 @@ func (s *Service) ResolveConflict(ctx context.Context, id, choice, merged string
 		if err := remove(conflict.ConflictCopyPath, min(conflict.LocalHash, conflict.RemoteHash)); err != nil {
 			return err
 		}
+	}
+	if err := volume.check(); err != nil {
+		return err
 	}
 	conflict.Status = "resolved"
 	conflict.ResolvedAt = time.Now()
