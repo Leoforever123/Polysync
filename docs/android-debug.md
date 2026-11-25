@@ -1,6 +1,6 @@
 # Android 预览版
 
-当前版本为 `0.5.2-dev.6`（versionCode 6），适用于 Android 10 及以上的 arm64 设备。已经使用 dev.5「PolySync 预览版」的用户可直接覆盖安装，设备身份、配对和工作区保留。预览包名为 `org.polysync.android.preview`。
+当前版本为 `0.5.3-dev.7`（versionCode 7），适用于 Android 10 及以上的 arm64 设备。已经使用 dev.5 或 dev.6「PolySync 预览版」的用户可直接覆盖安装，设备身份、配对和工作区保留。预览包名为 `org.polysync.android.preview`。
 
 dev.4 及更早的「PolySync 调试版」使用独立的包名与签名，可与预览版并装。从调试版首次使用预览版，需要重新配对并接受文件夹邀请。旧应用中的接收文件和本地修改可从原应用导出。
 
@@ -23,7 +23,7 @@ dev.4 及更早的「PolySync 调试版」使用独立的包名与签名，可�
 
 - Kotlin 原生界面 + 同进程 Go 库；没有 WebView、浏览器、额外 HTTP 监听端口或更新服务。预览版监听 TCP 45124，旧调试版使用 45123。手动连接时请复制应用内显示的地址。
 - 用户打开应用时启动前台服务。Android 13 及以上可在“接收中 → 开启后台通知”授权显示接收通知。可从应用或通知停止服务。
-- 前台界面每 2 秒读取本地状态，离开后停止界面轮询；服务每 10 秒检查本地任务状态。NSD 由系统负责局域网广播和浏览，通过发现 / 丢失事件更新 Go 的内存设备表；应用不再额外运行 Go mDNS 套接字或扫描定时器，停止服务时注销 NSD。未增加定时文件夹扫描。
+- 前台界面每 2 秒读取本地状态，离开后停止界面轮询。服务每 10 秒检查任务是否空闲。服务运行时，核心每 2 秒核对活动工作区的根目录和标记，原盘接回后可恢复被中断的任务。首次升级时会核对历史文件。NSD 由系统负责局域网广播和浏览，通过发现和丢失事件更新 Go 的内存设备表，停止服务时注销 NSD。
 - 后台空闲 10 分钟后停止服务；传输或同步活跃时延后。使用系统 dataSync 前台服务类型并处理系统超时，不承诺绕过 Android / vivo 后台限制实现永久在线。
 - 系统文件 URI 通过 64 KiB 缓冲导入私有临时文件，再流式交给核心；导入完成后删除该临时文件。进程被系统强制终止时可能留下暂存文件，后续补充清理策略。
 - 这里只完成运行基础，不把 APK 大小、Go 堆、Android PSS 混为“内存占用”。常驻内存、传输峰值、事件触发同步另行测量和优化。
@@ -93,10 +93,20 @@ Windows 的 `desktopRoot` 参数应使用正斜杠（例如 `E:/path/to/test/wor
 在单独的 Android 模拟器中安装与其 ABI 对应的上一版预览 APK。先完成配对并准备工作区文件，再使用下列命令对同一台模拟器覆盖安装新版。脚本核对包名、递增的版本号和签名，比较升级前后的应用 UID、私有标记、设置和工作区文件的 SHA-256。设备端测试文件只在指定模拟器内创建。
 
 ```sh
-apps/android/test-upgrade.sh emulator-5584 /path/to/dev5.apk /path/to/dev6.apk
+apps/android/test-upgrade.sh emulator-5584 /path/to/dev6.apk /path/to/dev7.apk
 ```
 
-### 0.5.2-dev.6 验证结果
+## 0.5.3-dev.7 外置盘保护
+
+手机的「同步」页会在受影响的工作区显示正在等待哪一端接回原盘。本机原目录不可用时，「立即同步」显示为「已暂停」，原盘接回后自动恢复。其他工作区和「随传」仍可使用。工作区用于确认目录身份的隐藏标记由应用维护，文件列表、导入和导出只提供用户文件。
+
+在 Android 15 x86_64 模拟器上从 dev.6 覆盖升级，核对了设备身份、配对和原工作区，实际打开系统保存窗口导出旧文件。移走有同步记录的目录、在原路径放入另一目录、再放回原目录，三步均通过。窄屏、深色和减少动态效果下，受影响文件夹显示暂停原因，仍可切换到「随传」。桌面对端的文件在全过程中内容一致。
+
+四项 Kotlin 单元测试与八项设备测试通过。设备用例包含两个真实引擎的 2 MiB 文件传输、同路径替换后原文件的导出快照、对替代目录的列举和导入导出拦截、接回原目录后中断的同步自动重试。另在模拟器与独立 Linux 桌面进程间完成了一项互通测试，桌面收到的文件和同步副本均与手机发送的 480,000 字节完全相同。Android lint 有 0 项错误、3 项警告。
+
+ARM64 发布 APK 已在 Android 15 模拟器从 dev.6 覆盖升级，应用 UID、私有文件和旧签名均通过核对。安装包及设备上读取的 APK 大小为 12,107,800 字节，SHA-256 为 `c2801f8904b8beb80e89335d27d07a15da33e78acb7ea61090c890b633a84e20`。原生库在 APK 中通过了 16 KiB ZIP 对齐检查，其 ELF 加载段也按 16 KiB 对齐。本轮没有连接实体 ARM 手机。
+
+## 0.5.2-dev.6 验证结果
 
 本次使用两台全新 Android 15 模拟器，先安装已发布的 0.5.0-dev.5 并核对 versionCode 5。x86_64 模拟器随后覆盖升级到 0.5.2-dev.6。升级前通过验证码与临时桌面配对，并在已有工作区保存校验文件。升级后应用 UID、设备身份、配对配置和工作区文件内容均保持一致。从「随传」仍能选择原接收设备，从「同步 → 查看与导出」能将原文件交给系统保存。四项 Kotlin 单元测试、八项 Android instrumentation 和另行执行的 Linux 桌面与 Android 互通测试通过。Android lint 报告 0 errors、3 warnings。
 
@@ -150,12 +160,12 @@ ARM64 发布 APK 也在支持 ARM 包安装的 Android 15 模拟器上通过了 
 
 ## 随桌面版本发布实验包
 
-用本机预览签名构建、验证 APK 后，将发行文件放入仓库的 Git LFS 存储，源码中只保存指针。下面以桌面 v0.5.2 为例。保持签名密钥在原构建环境中。
+用本机预览签名构建、验证 APK 后，将发行文件放入仓库的 Git LFS 存储，源码中只保存指针。下面以桌面 v0.5.3 为例。保持签名密钥在原构建环境中。
 
 ```sh
 mkdir -p packaging/android
-git lfs clean < dist/polysync-android-arm64-preview.apk > packaging/android/preview-v0.5.2.lfs
-git lfs push --object-id origin "$(sed -n 's/^oid sha256://p' packaging/android/preview-v0.5.2.lfs)"
+git lfs clean < dist/polysync-android-arm64-preview.apk > packaging/android/preview-v0.5.3.lfs
+git lfs push --object-id origin "$(sed -n 's/^oid sha256://p' packaging/android/preview-v0.5.3.lfs)"
 ```
 
 正式标签的构建会通过指针取回同一份 APK，检查 Android 签名与 SHA-256 后把它放进 Release。普通源码检出不需要下载这个安装包。
