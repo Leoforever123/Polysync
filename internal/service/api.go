@@ -452,6 +452,30 @@ func (s *Service) handlePickFolder(writer http.ResponseWriter, _ *http.Request) 
 	writeJSON(writer, http.StatusOK, map[string]any{"path": path})
 }
 
+// Settings retain the configured location even while the last path components
+// are absent. Existing ancestors can have multiple spellings (macOS /var,
+// Windows short names). Compare those directories without recreating them.
+func sameConfiguredPath(saved, input string) bool {
+	for {
+		if rel, err := filepath.Rel(saved, input); err == nil && rel == "." {
+			return true
+		}
+		left, le := os.Stat(saved)
+		right, re := os.Stat(input)
+		if le == nil && re == nil {
+			return os.SameFile(left, right)
+		}
+		if !(os.IsNotExist(le) && os.IsNotExist(re)) || filepath.Base(saved) != filepath.Base(input) {
+			return false
+		}
+		l, r := filepath.Dir(saved), filepath.Dir(input)
+		if l == saved || r == input {
+			return false
+		}
+		saved, input = l, r
+	}
+}
+
 func (s *Service) preparePath(input, exceptID string) (string, error) {
 	input = strings.TrimSpace(input)
 	if input == "" {
@@ -462,7 +486,7 @@ func (s *Service) preparePath(input, exceptID string) (string, error) {
 		return "", err
 	}
 	if sh, ok := s.store.Share(exceptID); ok {
-		if filepath.Clean(sh.Path) == absolute {
+		if sameConfiguredPath(sh.Path, absolute) {
 			return sh.Path, nil
 		}
 		// A moved sync directory must carry its original marker. A fresh

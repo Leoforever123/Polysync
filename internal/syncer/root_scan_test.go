@@ -3,9 +3,10 @@ package syncer
 import (
 	"os"
 	"path/filepath"
-	"polysync/internal/rootidentity"
 	"strings"
 	"testing"
+
+	"polysync/internal/rootidentity"
 )
 
 func TestScanExcludesAndProtectsLocalRootMarker(t *testing.T) {

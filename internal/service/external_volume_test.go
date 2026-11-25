@@ -354,6 +354,9 @@ func TestExternalVolumeSchedulerResumesOnlyTheOriginalFolder(t *testing.T) {
 			slot.detach(t)
 			disk.s.checkSyncFolders(t.Context())
 			waitForVolumeState(t, disk, id, "paused")
+			// The same scheduler tick independently probes the healthy share.
+			// Wait for that probe to release its lock before a manual request.
+			verifyGroupApplied(t, healthy, otherID)
 			assertTestFile(t, peer.dir, "stay", "on disk")
 			writeTestFile(t, healthy.dir, "independent", "after")
 			if err := volumeRound(t, otherID, healthy, healthyPeer); err != nil {
