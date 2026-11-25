@@ -49,14 +49,14 @@ jobs:
       - name: Verify updater and installation lifecycle
         shell: pwsh
         env:
-          POLYSYNC_MSI_OLD_VERSION: 0.5.0
-          POLYSYNC_MSI_OLD_BINARY: .cache/original-v0.5.0.exe
+          POLYSYNC_MSI_OLD_VERSION: 0.5.2
+          POLYSYNC_MSI_OLD_BINARY: .cache/original-v0.5.2.exe
           POLYSYNC_MSI_NEW_BINARY: dist/polysync-windows-amd64.exe
           POLYSYNC_MSI_NEW_VERSION: ${{ needs.version.outputs.number }}
         run: |
           $ErrorActionPreference = 'Stop'
-          Invoke-WebRequest 'https://github.com/Leoforever123/Polysync/releases/download/v0.5.0/polysync-windows-amd64.exe' -OutFile $env:POLYSYNC_MSI_OLD_BINARY
-          if ((Get-FileHash $env:POLYSYNC_MSI_OLD_BINARY).Hash -ne 'a3805d04e029c39fb520a9bedfe50466c64da523979c0e060d84503d664d3edf') { throw 'Old binary checksum mismatch' }
+          Invoke-WebRequest 'https://github.com/Leoforever123/Polysync/releases/download/v0.5.2/polysync-windows-amd64.exe' -OutFile $env:POLYSYNC_MSI_OLD_BINARY
+          if ((Get-FileHash $env:POLYSYNC_MSI_OLD_BINARY).Hash -ne 'd9ea1197edd72997f733583425af0e679d04d7c608dcc3bd9f0ad29f791cf141') { throw 'Old binary checksum mismatch' }
           node tests/msi.integration.cjs
       - uses: actions/upload-artifact@v4
         with:

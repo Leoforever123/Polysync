@@ -40,6 +40,10 @@ go run ./cmd/polysync
 
 设备只需配对一次，之后可以创建多个互不重叠的同步文件夹。在已有文件夹上选择“添加设备”，可以邀请第三台设备共同编辑或跟随接收。直连范围和回传权限见[多设备文件夹](docs/folder-groups.md)。
 
+**外置盘同步。** PolySync 会记住这个文件夹在原磁盘上的身份。磁盘拔出后，该文件夹会显示“已暂停”，对端保留现有文件。即使另一块盘占用了同一个盘符或挂载路径，也会继续等待原盘。原盘和文件夹回到原路径后，系统会自动重新检查，继续按原有同步设置工作。其他文件夹可照常同步。首次绑定时，PolySync 需要能在同步目录写入一个隐藏标记，请随文件夹保留它。
+
+升级旧配置时，系统先根据上次同步记录核对目录。若文件夹原本为空、没有可比对的记录，或原有文件在升级前已经更改或删除，系统会等待。确认原盘已接回仍无法恢复时，可保留两端文件，重新发起文件夹邀请。
+
 取消配对：电脑端从“管理设备”进入已配对设备卡片，点击“取消配对”；Android 在“设备 → 我的设备”中选择“取消配对”，确认后撤销本机信任，离线设备也可移除。与该设备的连接停用，同一文件夹中的其他设备可以继续同步。本地文件、历史和随传记录保留；Android 工作区仍可查看与导出。有设备操作或文件任务进行时请先完成或取消，再重试。
 
 取消配对仅在本机生效，对方需单独取消。重新连接前，先在双方取消配对，再重新验证并创建同步邀请；旧同步不会自动恢复。电脑端如需继续使用原文件夹，可先移除已停用的同步配置（不删除文件）再重新邀请。详见 [取消配对：行为与验证](docs/unpairing.md)。
@@ -51,8 +55,8 @@ Windows 安装版：打开 `polysync-windows-amd64.msi`，安装后从开始菜�
 Linux 用户可从 [官网下载页](https://leoforever123.github.io/Polysync/#downloads) 或 [GitHub Release](https://github.com/Leoforever123/Polysync/releases/latest) 点击下载 Ubuntu / Arch 安装包。下载后在所在目录打开终端：
 
 ```sh
-sudo apt install ./polysync_0.5.2-1_amd64.deb           # Ubuntu x86_64
-sudo pacman -U ./polysync-0.5.2-1-x86_64.pkg.tar.zst   # Arch x86_64
+sudo apt install ./polysync_0.5.3-1_amd64.deb           # Ubuntu x86_64
+sudo pacman -U ./polysync-0.5.3-1-x86_64.pkg.tar.zst   # Arch x86_64
 ```
 
 Ubuntu ARM64 使用对应的 `_arm64.deb`。安装后可从应用菜单打开，或运行 `polysync -tray=false`。后台服务可选用 `systemctl --user enable --now polysync.service`，安装过程不会自动启用。Linux 更新使用新版安装包，卸载保留个人数据；完整命令、依赖与验证范围见 [Linux 安装与更新](docs/linux-installation.md)。
@@ -93,7 +97,7 @@ Linux 或 macOS：
 
 从 Windows 复制 Linux/macOS 原始二进制后，需要先恢复执行权限：`chmod +x polysync-*`。
 
-在 Linux/WSL 中对上述二进制打包：`python3 scripts/package-linux.py --version 0.5.2 --format all`。需要 Python 3.11+、dpkg-deb 和 makepkg；也可单独指定 `--format deb` 或 `--format arch`。脚本校验 ELF 架构、静态链接以及构建生成的 `.build-info` 版本/哈希，输出安装包、离线 Arch 构建材料和独立的 `SHA256SUMS-linux-0.5.2-1-all.txt`。安装升级与交互验收见 [v0.5 验证记录](docs/experience-verification.md)。
+在 Linux/WSL 中对上述二进制打包：`python3 scripts/package-linux.py --version 0.5.3 --format all`。需要 Python 3.11+、dpkg-deb 和 makepkg；也可单独指定 `--format deb` 或 `--format arch`。脚本校验 ELF 架构、静态链接以及构建生成的 `.build-info` 版本/哈希，输出安装包、离线 Arch 构建材料和独立的 `SHA256SUMS-linux-0.5.3-1-all.txt`。安装升级与交互验收见 [v0.5 验证记录](docs/experience-verification.md)。
 
 ## 随传与新手引导
 
