@@ -39,10 +39,14 @@ function toast(message, error = false) {
   state.toastTimer = setTimeout(() => node.className = "toast", 2800);
 }
 
+const timeOfDay = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" });
+const monthAndTime = new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+
 function formatTime(value) {
   if (!value || value.startsWith("0001-")) return "从未";
   const date = new Date(value);
-  return date.toDateString() === new Date().toDateString() ? `今天 ${date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : date.toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  if (Number.isNaN(date.getTime())) return "未知时间";
+  return date.toDateString() === new Date().toDateString() ? `今天 ${timeOfDay.format(date)}` : monthAndTime.format(date);
 }
 
 async function refresh(silent = false) {

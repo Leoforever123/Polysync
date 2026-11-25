@@ -54,6 +54,14 @@ test("folder names and paths are escaped and pending/syncing actions disabled", 
   assert.match(a.run("shareCard(folder)"), /sync-button" disabled/);
 });
 
+test("folder timestamps use the local day and handle absent or invalid data", () => {
+  const a = app();
+  assert.match(a.run("formatTime(new Date().toISOString())"), /^今天 /);
+  assert.doesNotMatch(a.run("formatTime('2020-06-21T10:05:00Z')"), /^今天 /);
+  assert.equal(a.run("formatTime('0001-01-01T00:00:00Z')"), "从未");
+  assert.equal(a.run("formatTime('invalid timestamp')"), "未知时间");
+});
+
 test("a paused folder shows the current reason ahead of the last successful sync", () => {
   const a = app();
   const share = { id: "photos", name: "照片", state: "active", autoSync: true,
