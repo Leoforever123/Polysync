@@ -86,7 +86,7 @@ func ScanRoot(ctx context.Context, root *os.Root) ([]model.Entry, error) {
 		if item.IsDir() {
 			return nil
 		}
-		if isInternalTemporary(item.Name()) {
+		if IsTemporaryFileName(item.Name()) {
 			return nil
 		}
 		info, err := root.Lstat(path)
@@ -116,7 +116,9 @@ func ScanRoot(ctx context.Context, root *os.Root) ([]model.Entry, error) {
 	return entries, nil
 }
 
-func isInternalTemporary(name string) bool {
+// IsTemporaryFileName reports reserved staging and backup file names. A directory
+// with either prefix can still contain ordinary synchronized files.
+func IsTemporaryFileName(name string) bool {
 	return strings.HasPrefix(name, ".polysync-part-") || strings.HasPrefix(name, ".polysync-backup-")
 }
 

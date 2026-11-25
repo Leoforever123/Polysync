@@ -37,7 +37,10 @@ class CoreDeviceTest : ForegroundDeviceTest() {
             a.importToWorkspace(share, "payload", "文件.bin")
             val invitation = JSONObject(b.request("GET", "/api/status", "")).getJSONArray("shareInvitations").getJSONObject(0).getString("id")
             b.createWorkspace("测试工作区", "", invitation)
-            waitUntil { JSONArray(b.workspaceFiles(share)).length() > 0 }
+            waitUntil {
+                val files = JSONArray(b.workspaceFiles(share))
+                (0 until files.length()).any { files.getJSONObject(it).getString("name") == "文件.bin" }
+            }
             assertTrue(payload.contentEquals(File(b.workspaceExportPath(share, "文件.bin")).readBytes()))
             // A second directory at the same path must not publish a deletion.
             val sourceState = { JSONObject(a.request("GET", "/api/status", "")).getJSONArray("shares").getJSONObject(0) }

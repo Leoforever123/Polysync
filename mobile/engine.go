@@ -396,7 +396,7 @@ func (e *Engine) WorkspaceFiles(id string) (string, error) {
 		if d.Type()&os.ModeSymlink != 0 {
 			return errors.New("工作区包含符号链接")
 		}
-		if d.IsDir() {
+		if d.IsDir() || syncer.IsTemporaryFileName(d.Name()) {
 			return nil
 		}
 		if len(files) >= 2000 {
@@ -424,7 +424,7 @@ func (e *Engine) ImportToWorkspace(id, importName, displayName string) error {
 	if e.svc == nil {
 		return errors.New("服务未启动")
 	}
-	if !safeName(importName) || !safeName(displayName) || rootidentity.Reserved(displayName) {
+	if !safeName(importName) || !safeName(displayName) || rootidentity.Reserved(displayName) || syncer.IsTemporaryFileName(displayName) {
 		return errors.New("文件名无效")
 	}
 	dstRoot, err := e.openWorkspace(id)
@@ -504,7 +504,7 @@ func (e *Engine) WorkspaceExportPath(id, name string) (string, error) {
 	if e.svc == nil {
 		return "", errors.New("服务未启动")
 	}
-	if !filepath.IsLocal(name) || syncer.ValidateRelativePath(filepath.ToSlash(name)) != nil {
+	if !filepath.IsLocal(name) || syncer.ValidateRelativePath(filepath.ToSlash(name)) != nil || syncer.IsTemporaryFileName(filepath.Base(name)) {
 		return "", errors.New("路径无效")
 	}
 	root, err := e.openWorkspace(id)
