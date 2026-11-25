@@ -174,7 +174,7 @@ class MainActivity : Activity() {
             button.isEnabled = false
             button.text = pending
             work(operation, { error ->
-                button.text = label; button.isEnabled = true; message(error)
+                button.text = label; button.isEnabled = true; message(error); refreshSoon()
             }) { result ->
                 button.text = label; button.isEnabled = true
                 if (resumed && button.isAttachedToWindow) success(result)
@@ -403,7 +403,7 @@ class MainActivity : Activity() {
                     if(shares.length() > 0) section("我的工作区")
                     for(i in 0 until shares.length()) {
                         val s=shares.getJSONObject(i);val id=s.getString("id");val c=card();c.addView(text(s.optString("name"),18,bold=true));space(c,8);val label=text("",12,design.muted);labels[id]=label;c.addView(label)
-                        if(running && s.optString("state")=="active") asyncAction(c,"立即同步","正在开始…",true,"sync:$id",{ request("POST","/api/shares/$id/sync"); "已开始同步" })
+                        if(running && s.optString("state")=="active") asyncAction(c,"立即同步","正在请求…",true,"sync:$id",{ request("POST","/api/shares/$id/sync"); "已请求同步" })
                         val members = s.optJSONArray("members")?.objects().orEmpty()
                         if (s.optString("state") in setOf("active", "pending", "disconnected") || (s.optString("state") == "unpaired" && s.optString("localRole") == "collaborator")) {
                             val role = s.optString("localRole").ifBlank { "collaborator" }
@@ -444,20 +444,28 @@ class MainActivity : Activity() {
         if (page == "随传") updateTransfers()
         if (page != "工作区") return
         for (s in shares.objects()) {
+            val runtime = s.optJSONObject("status")
+            val mode = runtime?.optString("state")
             val status = when (s.optString("state")) {
                 "unpaired" -> "已取消配对 · 可查看与导出本地文件"
                 "disconnected" -> "已停止同步 · 本地文件已保留"
                 "pending" -> "等待对方接受邀请"
-                else -> s.optJSONObject("status")?.optString("message").orEmpty().ifBlank { "准备就绪" }
+                else -> runtime?.optString("message").orEmpty().ifBlank { if (mode == "paused") "文件夹同步已暂停" else "准备就绪" }
             }
             val id = s.optString("id")
             labels[id]?.let { if (it.text != status) it.text = status }
+            val localFilesAvailable = mode != "paused" || s.optString("state") != "active"
+            list.findViewWithTag<Button>("import:$id")?.isEnabled = localFilesAvailable
+            list.findViewWithTag<Button>("files:$id")?.isEnabled = localFilesAvailable
             list.findViewWithTag<Button>("sync:$id")?.let { button ->
-                if (button.text != "正在开始…") {
-                    val busy = s.optJSONObject("status")?.optString("state") == "syncing"
-                    val title = if (busy) "同步中…" else "立即同步"
+                if (button.text != "正在请求…") {
+                    val title = when (mode) {
+                        "syncing" -> "同步中…"
+                        "paused" -> "已暂停"
+                        else -> "立即同步"
+                    }
                     if (button.text != title) button.text = title
-                    button.isEnabled = !busy
+                    button.isEnabled = mode != "syncing" && mode != "paused"
                 }
             }
         }

@@ -146,6 +146,8 @@ class DesignDeviceTest : ForegroundDeviceTest() {
             val original = snapshot.get(screen)
             try {
                 val state = JSONObject("""{"pairedDevices":[{"id":"a","name":"电脑 A"},{"id":"b","name":"电脑 B"}],"shares":[{"id":"w","name":"文稿","state":"active","localRole":"collaborator","members":[{"deviceId":"a","role":"collaborator","state":"active"}]}]}""")
+                state.getJSONArray("shares").put(JSONObject().put("id","photos").put("name","照片").put("state","active")
+                    .put("status",JSONObject().put("state","waiting").put("message","等待电脑 B 接回原盘")))
                 snapshot.set(screen,state)
                 tagged("nav:工作区").performClick()
                 tagged("member:w").performClick()
@@ -160,9 +162,34 @@ class DesignDeviceTest : ForegroundDeviceTest() {
                 share.put("status",JSONObject().put("state","syncing"))
                 display()
                 assertFalse(tagged("sync:w").isEnabled)
+                val reason = "电脑 A 的原盘尚未接回"
+                share.put("status",JSONObject().put("state","paused").put("message",reason))
+                display()
+                val pausedButton = tagged("sync:w")
+                assertFalse(pausedButton.isEnabled)
+                assertFalse(tagged("import:w").isEnabled)
+                assertFalse(tagged("files:w").isEnabled)
+                assertTrue(tagged("sync:photos").isEnabled)
+                assertTrue(tagged("files:photos").isEnabled)
+                assertTrue(textIn(screen.window.decorView,"已暂停"))
+                val status = all(screen.window.decorView).filterIsInstance<TextView>().single { it.text == reason }
+                assertEquals(reason, status.createAccessibilityNodeInfo().text.toString())
+                assertEquals(View.ACCESSIBILITY_LIVE_REGION_NONE, status.accessibilityLiveRegion)
+                val updates = mutableListOf<String>()
+                status.addTextChangedListener(object : android.text.TextWatcher {
+                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { updates.add(s.toString()) }
+                    override fun afterTextChanged(s: android.text.Editable?) {}
+                })
+                display()
+                assertSame(pausedButton,tagged("sync:w"))
+                assertTrue("A poll rewrote the pause reason", updates.isEmpty())
                 share.put("status",JSONObject().put("state","idle"))
                 display()
                 assertTrue(tagged("sync:w").isEnabled)
+                assertTrue(tagged("files:w").isEnabled)
+                assertTrue(tagged("import:w").isEnabled)
+                assertEquals(listOf("准备就绪"), updates)
                 share.put("localRole","follower")
                 display()
                 assertNull(tagged("member:w")); assertNull(tagged("import:w"))

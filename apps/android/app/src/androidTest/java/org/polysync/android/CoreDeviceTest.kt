@@ -39,6 +39,47 @@ class CoreDeviceTest : ForegroundDeviceTest() {
             b.createWorkspace("测试工作区", "", invitation)
             waitUntil { JSONArray(b.workspaceFiles(share)).length() > 0 }
             assertTrue(payload.contentEquals(File(b.workspaceExportPath(share, "文件.bin")).readBytes()))
+            // A second directory at the same path must not publish a deletion.
+            val sourceState = { JSONObject(a.request("GET", "/api/status", "")).getJSONArray("shares").getJSONObject(0) }
+            val source = File(sourceState().getString("path"))
+            val originalExport = File(a.workspaceExportPath(share, "文件.bin"))
+            val original = File(dir, "temporarily-disconnected")
+            waitUntil { !a.hasActiveWork() && !b.hasActiveWork() }
+            assertTrue(source.renameTo(original))
+            assertTrue(source.mkdir())
+            val wrongFile = File(source, "文件.bin").apply { writeText("replacement disk") }
+            for ((action, operation) in listOf<Pair<String, () -> Unit>>(
+                "list" to { a.workspaceFiles(share) },
+                "import" to { a.importToWorkspace(share, "payload", "误导入.bin") },
+                "export" to { a.workspaceExportPath(share, "文件.bin") }
+            )) {
+                try {
+                    operation()
+                    fail("Allowed $action on the replacement disk")
+                } catch (e: Exception) {
+                    assertTrue("$action did not report the missing original disk: ${e.message}", e.message.orEmpty().contains("原盘"))
+                }
+            }
+            assertTrue(payload.contentEquals(originalExport.readBytes()))
+            try {
+                a.request("POST", "/api/shares/$share/sync", "{}")
+                fail("A replacement folder accepted a manual sync")
+            } catch (e: Exception) {
+                assertTrue("Expected guidance to reconnect the disk: ${e.message}", e.message.orEmpty().contains("原盘"))
+            }
+            waitUntil { sourceState().getJSONObject("status").optString("state") == "paused" }
+            assertEquals(listOf("文件.bin"),source.list().orEmpty().toList())
+            assertEquals("replacement disk",wrongFile.readText())
+            assertTrue(payload.contentEquals(File(b.workspaceExportPath(share, "文件.bin")).readBytes()))
+            File(original, "reconnected.txt").writeText("original folder returned")
+            assertTrue(wrongFile.delete())
+            assertTrue(source.delete())
+            assertTrue(original.renameTo(source))
+            waitUntil {
+                try { File(b.workspaceExportPath(share, "reconnected.txt")).readText() == "original folder returned" }
+                catch (_: Exception) { false }
+            }
+            assertTrue(payload.contentEquals(File(b.workspaceExportPath(share, "文件.bin")).readBytes()))
             val info = JSONObject(b.request("GET","/api/status","")).getJSONArray("shares").getJSONObject(0)
             assertEquals("follower", info.getString("localRole"))
             File(right,"imports/local-only").writeText("keep local")

@@ -9,8 +9,8 @@ android {
         applicationId = "org.polysync.android.preview"
         minSdk = 29
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.5.2-dev.6"
+        versionCode = 7
+        versionName = "0.5.3-dev.7"
         ndk { abiFilters += providers.gradleProperty("polysyncAbi").orElse("arm64-v8a").get() }
         testInstrumentationRunner = "android.test.InstrumentationTestRunner"
     }
