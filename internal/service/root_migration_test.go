@@ -76,7 +76,7 @@ func TestExternalVolumeUpgradeUsesPriorContents(t *testing.T) {
 				if got := peer.s.Statuses()[id]; got.State != "waiting" || !strings.Contains(got.Message, "对端") {
 					t.Fatalf("peer status: %+v", got)
 				}
-				if got := disk.s.Statuses()[id]; got.State != "paused" || !strings.Contains(got.Message, "原盘") {
+				if got := disk.s.Statuses()[id]; got.State != "paused" || got.LastSync.IsZero() || !strings.Contains(got.Message, "原盘") {
 					t.Fatalf("local status: %+v", got)
 				}
 				if current, _ := disk.s.store.Share(id); current.RootID != "" {

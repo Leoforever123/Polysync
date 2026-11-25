@@ -109,20 +109,15 @@ func InstallPlannedContent(ctx context.Context, root, historyRoot string, entry 
 		tmp.Close()
 		return err
 	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
 	if got := hex.EncodeToString(hash.Sum(nil)); got != entry.Hash {
+		tmp.Close()
 		return fmt.Errorf("hash mismatch for %s", entry.Path)
 	}
 	if err := checkRoot(ctx); err != nil {
+		tmp.Close()
 		return err
 	}
-	if err := dir.Chmod(tmpPath, os.FileMode(entry.Mode)&0o777); err != nil && !errors.Is(err, os.ErrPermission) {
+	if err := finishStagedFile(tmp, os.FileMode(entry.Mode)); err != nil {
 		return err
 	}
 	modTime := time.Unix(0, entry.ModTime)
@@ -217,14 +212,7 @@ func WriteResolvedStream(ctx context.Context, root, relative, historyRoot string
 		tmp.Close()
 		return err
 	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := dir.Chmod(tmpPath, mode&0o777); err != nil && !errors.Is(err, os.ErrPermission) {
+	if err := finishStagedFile(tmp, mode); err != nil {
 		return err
 	}
 	if err := archiveExisting(ctx, dir, relative, historyRoot, ""); err != nil {
@@ -234,6 +222,16 @@ func WriteResolvedStream(ctx context.Context, root, relative, historyRoot string
 		return err
 	}
 	return replaceFile(dir, tmpPath, destination)
+}
+
+// Set permissions through the open file. On Android, changing a path's mode
+// through os.Root would invoke fchmodat2, which is blocked by app seccomp.
+func finishStagedFile(file *os.File, mode os.FileMode) error {
+	err := file.Chmod(mode.Perm())
+	if err == nil || errors.Is(err, os.ErrPermission) {
+		err = file.Sync()
+	}
+	return errors.Join(err, file.Close())
 }
 
 func replaceFile(dir *os.Root, source, destination string) error {

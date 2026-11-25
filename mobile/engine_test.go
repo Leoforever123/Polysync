@@ -3,6 +3,7 @@ package mobile
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -172,9 +173,12 @@ func TestMobilePairsTransfersAndSyncsWithDesktop(t *testing.T) {
 	if _, err = e.WorkspaceExportPath(share.ID, "../state/config.json"); err == nil {
 		t.Fatal("workspace traversal")
 	}
-	// First automatic invite sync must finish before requesting another session.
-	waitFor(t, func() bool { return e.svc.Statuses()[share.ID].State != "syncing" })
-	if err = e.svc.SyncShare(context.Background(), share.ID, true); err != nil {
+	// The invite's initial sync may still hold the folder after publishing its status.
+	waitFor(t, func() bool {
+		err = e.svc.SyncShare(t.Context(), share.ID, true)
+		return !errors.Is(err, service.ErrBusy)
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if b, err = os.ReadFile(filepath.Join(root, "phone-copy.txt")); err != nil || string(b) != string(data) {

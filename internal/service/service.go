@@ -76,7 +76,15 @@ func NewWithOptions(dataStore *store.Store, options Options) *Service {
 		pairingRequests: make(map[string]pendingPair), outboundPairs: make(map[string]outboundPair), shareInvitations: make(map[string]model.ShareInvitation),
 	}
 	for _, share := range dataStore.Config().Shares {
-		service.statuses[share.ID] = model.RuntimeStatus{ShareID: share.ID, State: "idle"}
+		last := dataStore.LastSyncTime(share.ID, share.PeerDeviceID)
+		for _, member := range share.Members {
+			if member.DeviceID != share.PeerDeviceID {
+				if at := dataStore.LastSyncTime(share.ID, member.DeviceID); at.After(last) {
+					last = at
+				}
+			}
+		}
+		service.statuses[share.ID] = model.RuntimeStatus{ShareID: share.ID, State: "idle", LastSync: last}
 		service.locks[share.ID] = &sync.Mutex{}
 	}
 	for _, invitation := range dataStore.Config().ShareInvitations {

@@ -13,8 +13,8 @@ import (
 )
 
 var errRootPaused = errors.New("文件夹同步已暂停")
-var errUnverifiedRoot = errors.New("无法从上次同步的文件确认原目录。请接回原盘；若仍未恢复，请核对文件后重新邀请此文件夹。")
-var errRemoteRootPaused = errors.New("对端的文件夹已暂停，正在等待对端接回原盘。")
+var errUnverifiedRoot = errors.New("升级后无法确认原文件夹。请接回原盘；若仍未恢复，请核对两端文件，再重新邀请此文件夹。")
+var errRemoteRootPaused = errors.New("本机文件夹可用，正在等待对端接回原盘。")
 
 type rootPause struct{ cause error }
 
@@ -23,7 +23,7 @@ func (e rootPause) Error() string {
 	case errors.Is(e.cause, errUnverifiedRoot):
 		return errUnverifiedRoot.Error()
 	case errors.Is(e.cause, rootidentity.ErrDifferentRoot):
-		return "当前位置的磁盘或文件夹已更换。接回本机原盘后会自动恢复。"
+		return "此位置未找到原同步文件夹。接回本机原盘后会自动恢复。"
 	case errors.Is(e.cause, os.ErrNotExist):
 		return "正在等待本机原盘。原文件夹回到此路径后会自动恢复。"
 	default:
