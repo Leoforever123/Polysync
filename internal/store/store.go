@@ -143,6 +143,7 @@ func (s *Store) UpdateShare(share model.Share) error {
 			old := s.config.Shares[i]
 			// Ordinary settings and membership changes never adopt another disk.
 			share.RootID = old.RootID
+			share.RetryOnReturn = old.RetryOnReturn
 			s.config.Shares[i] = share
 			if err := s.saveLocked(); err != nil {
 				s.config.Shares[i] = old
@@ -152,6 +153,28 @@ func (s *Store) UpdateShare(share model.Share) error {
 		}
 	}
 	return fmt.Errorf("share %q not found", share.ID)
+}
+
+// SetVolumeRetry persists a user's interrupted sync across an application restart.
+func (s *Store) SetVolumeRetry(id string, retry bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.config.Shares {
+		sh := &s.config.Shares[i]
+		if sh.ID != id {
+			continue
+		}
+		if sh.RetryOnReturn == retry {
+			return nil
+		}
+		sh.RetryOnReturn = retry
+		if err := s.saveLocked(); err != nil {
+			sh.RetryOnReturn = !retry
+			return err
+		}
+		return nil
+	}
+	return errors.New("同步文件夹已变更")
 }
 
 // BindMigratedRoot only fills the missing identity of the configuration we verified.

@@ -4,10 +4,13 @@ package mobile
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -308,6 +311,13 @@ func (e *Engine) CreateWorkspaceWithRole(name, peerID, invitationID, role string
 	if err := os.Mkdir(path, 0700); err != nil {
 		return "", err
 	}
+	// Enroll this specific new directory before sending. Its token lets a failed
+	// request remove only its own marker, even when a pathname is later reused.
+	binding, err := rootidentity.Bind(path)
+	if err != nil {
+		_ = os.Remove(path) // only an empty directory
+		return "", err
+	}
 	invite := map[string]any{"path": path, "name": name, "deviceId": peerID, "autoSync": false, "intervalSeconds": 30}
 	if role != "" {
 		invite["role"], invite["allowWriteBack"] = role, allowWriteBack
@@ -322,44 +332,43 @@ func (e *Engine) CreateWorkspaceWithRole(name, peerID, invitationID, role string
 	if err != nil {
 		// An interrupted confirmation can leave a pending membership for retry.
 		for _, share := range e.svc.Store().Config().Shares {
-			if share.Path == path {
+			if share.Path == path || share.RootID == binding {
 				return "", err
 			}
 		}
-		_ = os.Remove(path)
+		return "", errors.Join(err, rootidentity.RemoveUnusedBinding(path, binding))
 	}
 	return result, err
 }
 
 func (e *Engine) workspace(id string) (string, error) {
-	share, ok := e.svc.Store().Share(id)
-	if !ok {
-		return "", errors.New("工作区不存在")
-	}
-	// Android may return different absolute names for the same private data directory.
-	// Compare the real parent on both sides, while refusing changes to the workspace root itself.
-	managed := filepath.Join(e.dir, "workspaces")
-	expected, err := os.Stat(managed)
+	root, err := e.openWorkspace(id)
 	if err != nil {
 		return "", err
+	}
+	defer root.Close()
+	return root.Name(), nil
+}
+
+func (e *Engine) openWorkspace(id string) (*os.Root, error) {
+	share, ok := e.svc.Store().Share(id)
+	if !ok {
+		return nil, errors.New("工作区不存在")
+	}
+	// Android exposes aliases of the private data directory. Accept either
+	// parent spelling; the service verifies the workspace itself on the handle.
+	managed, err := os.Stat(filepath.Join(e.dir, "workspaces"))
+	if err != nil {
+		return nil, err
 	}
 	parent, err := os.Stat(filepath.Dir(share.Path))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	name := filepath.Base(share.Path)
-	if !os.SameFile(parent, expected) || !safeName(name) {
-		return "", errors.New("工作区不属于此应用")
+	if !os.SameFile(parent, managed) || !safeName(filepath.Base(share.Path)) {
+		return nil, errors.New("工作区不属于此应用")
 	}
-	path := filepath.Join(managed, name)
-	info, err := os.Lstat(path)
-	if err != nil {
-		return "", err
-	}
-	if !info.IsDir() {
-		return "", errors.New("工作区目录无效")
-	}
-	return path, nil
+	return e.svc.OpenWorkspaceRoot(id, share.Path)
 }
 
 func (e *Engine) WorkspaceFiles(id string) (string, error) {
@@ -368,16 +377,17 @@ func (e *Engine) WorkspaceFiles(id string) (string, error) {
 	if e.svc == nil {
 		return "", errors.New("服务未启动")
 	}
-	path, err := e.workspace(id)
+	root, err := e.openWorkspace(id)
 	if err != nil {
 		return "", err
 	}
+	defer root.Close()
 	files := []map[string]any{}
-	err = filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
+	err = fs.WalkDir(root.FS(), ".", func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if p != path && rootidentity.Reserved(d.Name()) {
+		if p != "." && rootidentity.Reserved(d.Name()) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -392,13 +402,12 @@ func (e *Engine) WorkspaceFiles(id string) (string, error) {
 		if len(files) >= 2000 {
 			return errors.New("文件较多，请在电脑上查看")
 		}
-		info, err := d.Info()
+		info, err := root.Lstat(filepath.FromSlash(p))
 		if err != nil {
 			return err
 		}
 		if info.Mode().IsRegular() {
-			rel, _ := filepath.Rel(path, p)
-			files = append(files, map[string]any{"name": filepath.ToSlash(rel), "size": info.Size()})
+			files = append(files, map[string]any{"name": p, "size": info.Size()})
 		}
 		return nil
 	})
@@ -418,10 +427,11 @@ func (e *Engine) ImportToWorkspace(id, importName, displayName string) error {
 	if !safeName(importName) || !safeName(displayName) || rootidentity.Reserved(displayName) {
 		return errors.New("文件名无效")
 	}
-	path, err := e.workspace(id)
+	dstRoot, err := e.openWorkspace(id)
 	if err != nil {
 		return err
 	}
+	defer dstRoot.Close()
 	share, _ := e.svc.Store().Share(id)
 	if share.LocalRole == model.RoleFollower {
 		canWrite := false
@@ -445,11 +455,6 @@ func (e *Engine) ImportToWorkspace(id, importName, displayName string) error {
 		return err
 	}
 	defer src.Close()
-	dstRoot, err := os.OpenRoot(path)
-	if err != nil {
-		return err
-	}
-	defer dstRoot.Close()
 	dst, err := dstRoot.OpenFile(displayName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return fmt.Errorf("无法导入，文件可能已存在：%w", err)
@@ -499,18 +504,27 @@ func (e *Engine) WorkspaceExportPath(id, name string) (string, error) {
 	if e.svc == nil {
 		return "", errors.New("服务未启动")
 	}
-	path, err := e.workspace(id)
-	if err != nil {
-		return "", err
-	}
 	if !filepath.IsLocal(name) || syncer.ValidateRelativePath(filepath.ToSlash(name)) != nil {
 		return "", errors.New("路径无效")
 	}
-	root, err := os.OpenRoot(path)
+	root, err := e.openWorkspace(id)
 	if err != nil {
 		return "", err
 	}
 	defer root.Close()
+	// Workspaces do not synchronize symbolic links. Refuse aliases to hidden
+	// markers as well as links leaving the workspace.
+	current := "."
+	for part := range strings.SplitSeq(filepath.ToSlash(name), "/") {
+		current = filepath.Join(current, part)
+		info, err := root.Lstat(current)
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", errors.New("工作区包含符号链接")
+		}
+	}
 	f, err := root.Open(name)
 	if err != nil {
 		return "", err
@@ -520,24 +534,29 @@ func (e *Engine) WorkspaceExportPath(id, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !info.Mode().IsRegular() {
-		return "", errors.New("仅支持普通文件")
+	if !info.Mode().IsRegular() || info.Size() > 16<<30 {
+		return "", errors.New("仅支持不超过 16 GiB 的普通文件")
 	}
-	actual, err := filepath.EvalSymlinks(filepath.Join(path, name))
+	// Android opens the returned path after its document picker closes. Use the
+	// same immutable object cache as sync so a later mount cannot redirect it.
+	digest := sha256.New()
+	size, err := io.Copy(digest, io.LimitReader(f, info.Size()+1))
 	if err != nil {
 		return "", err
 	}
-	// Android may expose app storage through an aliased directory. Compare two
-	// canonical paths, while OpenRoot above still rejects escaping file links.
-	canonicalRoot, err := filepath.EvalSymlinks(path)
+	after, err := root.Lstat(name)
 	if err != nil {
 		return "", err
 	}
-	rel, err := filepath.Rel(canonicalRoot, actual)
-	if err != nil || !filepath.IsLocal(rel) || syncer.ValidateRelativePath(filepath.ToSlash(rel)) != nil {
-		return "", errors.New("路径越界")
+	if size != info.Size() || after.Size() != size || !os.SameFile(info, after) || !info.ModTime().Equal(after.ModTime()) {
+		return "", errors.New("文件已更改，请重新导出")
 	}
-	return actual, nil
+	hash := hex.EncodeToString(digest.Sum(nil))
+	st := e.svc.Store()
+	if err := st.PutObject(root, model.Entry{Path: filepath.ToSlash(name), Hash: hash, Size: size}); err != nil {
+		return "", err
+	}
+	return st.ObjectPath(hash), nil
 }
 
 // HasActiveWork is a small native bridge call, without status serialization.

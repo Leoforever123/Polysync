@@ -199,7 +199,7 @@ func (s *Service) ResolveConflict(ctx context.Context, id, choice, merged string
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	ctx, volume, err := s.openVolume(ctx, share)
+	ctx, volume, err := s.openVolume(ctx, share, false)
 	if err != nil {
 		return err
 	}

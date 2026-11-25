@@ -76,6 +76,9 @@ func NewWithOptions(dataStore *store.Store, options Options) *Service {
 		pairingRequests: make(map[string]pendingPair), outboundPairs: make(map[string]outboundPair), shareInvitations: make(map[string]model.ShareInvitation),
 	}
 	for _, share := range dataStore.Config().Shares {
+		if share.RetryOnReturn {
+			service.rootRetry[share.ID] = true
+		}
 		last := dataStore.LastSyncTime(share.ID, share.PeerDeviceID)
 		for _, member := range share.Members {
 			if member.DeviceID != share.PeerDeviceID {

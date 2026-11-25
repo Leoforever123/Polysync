@@ -171,3 +171,103 @@ func TestExternalVolumeSettingsPreserveBinding(t *testing.T) {
 		t.Fatalf("failed to preserve binding while editing settings")
 	}
 }
+
+func TestExternalVolumeUpgradeKeepsReceiveOnlyPrivateEdits(t *testing.T) {
+	ns := groupNodes(t, 2)
+	upstream, follower := ns[0], ns[1]
+	writeTestFile(t, upstream.dir, "notes", "published")
+	id := groupLink(t, "", upstream, follower, model.RoleFollower, false)
+	writeTestFile(t, follower.dir, "notes", "private edit")
+	groupSync(t, id, follower, upstream)
+	reopenWithoutRootID(t, follower, id)
+	sh, _ := follower.s.store.Share(id)
+	if err := follower.s.checkLocalRoot(t.Context(), sh, false); err != nil {
+		t.Fatal(err)
+	}
+	assertTestFile(t, follower.dir, "notes", "private edit")
+	assertTestFile(t, upstream.dir, "notes", "published")
+}
+
+func TestExternalVolumeOfflinePreviewDoesNotQueueManualSync(t *testing.T) {
+	ns := groupNodes(t, 2)
+	upstream, follower := ns[0], ns[1]
+	slot := newVolumeSlot(t)
+	follower.dir = slot.path
+	writeTestFile(t, upstream.dir, "keep", "old")
+	id := groupLink(t, "", upstream, follower, model.RoleFollower, false)
+	sh, _ := follower.s.store.Share(id)
+	sh.Members[0].WriteBackPending = true
+	if err := follower.s.store.UpdateShare(sh); err != nil {
+		t.Fatal(err)
+	}
+	slot.detach(t)
+	if _, err := follower.s.previewWriteBack(t.Context(), sh); !errors.Is(err, errRootPaused) {
+		t.Fatalf("unavailable preview: %v", err)
+	}
+	follower.s.mu.RLock()
+	retry, paused := follower.s.rootRetry[id]
+	follower.s.mu.RUnlock()
+	if retry || !paused {
+		t.Fatalf("preview queued sync or missed pause: retry=%v paused=%v", retry, paused)
+	}
+	slot.attach(t, slot.original)
+	follower.s.checkSyncFolders(t.Context())
+	waitForVolumeState(t, follower, id, "idle")
+}
+
+func TestExternalVolumeInboundMemberKeepsInterruptedGroupRetry(t *testing.T) {
+	ns := groupNodes(t, 3)
+	disk, first, second := ns[0], ns[1], ns[2]
+	slot := newVolumeSlot(t)
+	disk.dir = slot.path
+	writeTestFile(t, disk.dir, "notes", "before")
+	id := groupLink(t, "", disk, first, model.RoleCollaborator, false)
+	groupLink(t, id, disk, second, model.RoleCollaborator, false)
+	slot.detach(t)
+	if err := disk.s.syncFailed(id, &os.PathError{Op: "read", Path: "notes", Err: os.ErrClosed}); !errors.Is(err, errRootPaused) {
+		t.Fatalf("unplug first reported by transfer lost manual retry: %v", err)
+	}
+	slot.attach(t, slot.original)
+	writeTestFile(t, first.dir, "notes", "from first")
+	if err := volumeRound(t, id, first, disk); err != nil {
+		t.Fatal(err)
+	}
+	assertTestFile(t, disk.dir, "notes", "from first")
+	assertTestFile(t, second.dir, "notes", "before")
+	disk.s.checkSyncFolders(t.Context())
+	verifyGroupApplied(t, disk, id)
+	assertTestFile(t, second.dir, "notes", "from first")
+}
+
+func TestExternalVolumeManualRequestSurvivesRestart(t *testing.T) {
+	nodes := groupNodes(t, 2)
+	disk, peer := nodes[0], nodes[1]
+	slot := newVolumeSlot(t)
+	disk.dir = slot.path
+	writeTestFile(t, disk.dir, "pending", "old")
+	id := groupLink(t, "", disk, peer, model.RoleCollaborator, false)
+	slot.detach(t)
+	if err := disk.s.SyncShare(t.Context(), id, true); !errors.Is(err, errRootPaused) {
+		t.Fatal(err)
+	}
+	config := disk.s.store.Dir()
+	disk.s.Stop()
+	st, err := store.Open(config, "127.0.0.1:0", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, _ := st.Share(id)
+	if !sh.RetryOnReturn || sh.AutoSync {
+		t.Fatal("interrupted manual request did not survive restart")
+	}
+	disk.restart(t, st)
+	writeTestFile(t, peer.dir, "pending", "after restart")
+	slot.attach(t, slot.original)
+	disk.s.checkSyncFolders(t.Context())
+	waitForVolumeState(t, disk, id, "synced")
+	assertTestFile(t, disk.dir, "pending", "after restart")
+	sh, _ = st.Share(id)
+	if sh.RetryOnReturn || sh.AutoSync {
+		t.Fatal("completed request changed manual settings or remained queued")
+	}
+}

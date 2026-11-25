@@ -43,9 +43,34 @@ type migrationFailure struct {
 // before enrolling the directory. In particular, never enroll an empty mount
 // point merely because a directory of the right name exists.
 func (s *Service) migrateRoot(ctx context.Context, sh model.Share) (string, error) {
+	root, err := os.OpenRoot(sh.Path)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	dir, err := root.Stat(".")
+	if err != nil {
+		return "", err
+	}
+	s.mu.RLock()
+	failed := s.migrationFailures[sh.ID]
+	s.mu.RUnlock()
+	if failed.directory != nil && time.Now().Before(failed.recheck) && os.SameFile(dir, failed.directory) {
+		return "", errUnverifiedRoot
+	}
+	unverified := func() (string, error) {
+		s.mu.Lock()
+		s.migrationFailures[sh.ID] = migrationFailure{dir, time.Now().Add(30 * time.Second)}
+		s.mu.Unlock()
+		return "", errUnverifiedRoot
+	}
 	want := make(map[string]string)
 	var groupHistory bool
-	if sh.ReplicaID != "" {
+	// A receive-only folder can keep private edits. Its revision journal
+	// describes the upstream, while its successful baseline describes the
+	// actual local files from that same round.
+	receiveOnly := sh.LocalRole == model.RoleFollower && len(sh.Members) == 1 && !sh.Members[0].AllowWriteBack
+	if sh.ReplicaID != "" && !receiveOnly {
 		state, err := s.checkedGroupState(sh)
 		if err != nil {
 			return "", err
@@ -67,28 +92,13 @@ func (s *Service) migrateRoot(ctx context.Context, sh model.Share) (string, erro
 		}
 	}
 	if len(want) == 0 {
-		return "", errUnverifiedRoot
-	}
-	root, err := os.OpenRoot(sh.Path)
-	if err != nil {
-		return "", err
-	}
-	defer root.Close()
-	dir, err := root.Stat(".")
-	if err != nil {
-		return "", err
-	}
-	s.mu.RLock()
-	failed := s.migrationFailures[sh.ID]
-	s.mu.RUnlock()
-	if failed.directory != nil && time.Now().Before(failed.recheck) && os.SameFile(dir, failed.directory) {
-		return "", errUnverifiedRoot
+		return unverified()
 	}
 	// Cheaply reject a missing file before hashing a large original folder.
 	for name := range want {
 		if _, err := root.Lstat(name); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return "", errUnverifiedRoot
+				return unverified()
 			}
 			return "", err
 		}
@@ -103,10 +113,7 @@ func (s *Service) migrateRoot(ctx context.Context, sh model.Share) (string, erro
 		}
 	}
 	if len(want) != 0 {
-		s.mu.Lock()
-		s.migrationFailures[sh.ID] = migrationFailure{dir, time.Now().Add(30 * time.Second)}
-		s.mu.Unlock()
-		return "", errUnverifiedRoot
+		return unverified()
 	}
 	id, err := rootidentity.BindRoot(root)
 	if err != nil {
@@ -142,26 +149,37 @@ func (s *Service) noteRootPause(id string, retry bool, err error) error {
 	status.ShareID, status.State, status.Message = id, "paused", err.Error()
 	s.statuses[id] = status
 	s.mu.Unlock()
+	if retry && !prior {
+		if saveErr := s.store.SetVolumeRetry(id, true); saveErr != nil {
+			s.log("warning", id, "无法保存待恢复的同步请求："+saveErr.Error())
+		}
+	}
 	if !paused {
 		s.log("warning", id, err.Error())
 	}
 	return err
 }
 
-func (s *Service) clearRootPause(id string) (bool, bool) {
+func (s *Service) clearRootPause(id string) {
 	s.mu.Lock()
 	retry, paused := s.rootRetry[id]
 	if paused {
 		delete(s.rootRetry, id)
 		status := s.statuses[id]
-		status.State, status.Message = "idle", "原盘已接回"
+		if status.State == "paused" {
+			status.State, status.Message = "idle", "原盘已接回"
+		}
 		s.statuses[id] = status
 	}
 	s.mu.Unlock()
+	if retry {
+		if err := s.store.SetVolumeRetry(id, false); err != nil {
+			s.log("warning", id, "无法更新待恢复的同步请求："+err.Error())
+		}
+	}
 	if paused {
 		s.log("info", id, "原同步文件夹已恢复")
 	}
-	return retry, paused
 }
 
 func (s *Service) checkLocalRoot(ctx context.Context, sh model.Share, retry bool) error {
@@ -195,7 +213,7 @@ func (v *syncVolume) check() error {
 	return nil
 }
 
-func (s *Service) openVolume(ctx context.Context, sh model.Share) (context.Context, *syncVolume, error) {
+func (s *Service) openVolume(ctx context.Context, sh model.Share, retry bool) (context.Context, *syncVolume, error) {
 	id, err := s.rootID(ctx, sh)
 	if err == nil {
 		dir, openErr := rootidentity.Open(sh.Path, id)
@@ -213,7 +231,7 @@ func (s *Service) openVolume(ctx context.Context, sh model.Share) (context.Conte
 	if ctx.Err() != nil {
 		return ctx, nil, ctx.Err()
 	}
-	return ctx, nil, s.noteRootPause(sh.ID, true, err)
+	return ctx, nil, s.noteRootPause(sh.ID, retry, err)
 }
 
 func (v *syncVolume) scan(ctx context.Context) ([]model.Entry, error) {
@@ -253,14 +271,17 @@ func (s *Service) checkSyncFolders(ctx context.Context) {
 			if err := s.checkLocalRoot(ctx, sh, false); err != nil {
 				return
 			}
-			retry, resumed := s.clearRootPause(sh.ID)
-			auto := sh.AutoSync && !s.options.DisableAutoSync
-			if !retry && !auto {
-				return
-			}
 			s.mu.RLock()
+			retry, resumed := s.rootRetry[sh.ID]
 			status := s.statuses[sh.ID]
 			s.mu.RUnlock()
+			auto := sh.AutoSync && !s.options.DisableAutoSync
+			if !retry && !auto {
+				if resumed {
+					s.clearRootPause(sh.ID)
+				}
+				return
+			}
 			interval := time.Duration(sh.IntervalSeconds) * time.Second
 			if interval < 5*time.Second {
 				interval = 30 * time.Second
@@ -276,4 +297,24 @@ func (s *Service) checkSyncFolders(ctx context.Context) {
 			_ = s.syncShareLocked(ctx, sh, false)
 		}()
 	}
+}
+
+// OpenWorkspaceRoot opens the mobile workspace previously checked by the
+// native bridge as belonging to app storage. The caller closes the handle.
+func (s *Service) OpenWorkspaceRoot(id, expectedPath string) (*os.Root, error) {
+	sh, ok := s.store.Share(id)
+	if !ok || sh.Path != expectedPath {
+		return nil, errors.New("工作区已变更")
+	}
+	if sh.RootID == "" {
+		// Only first-use migration needs serialization with synchronization.
+		lock := s.lockFor(id)
+		lock.Lock()
+		defer lock.Unlock()
+	}
+	_, volume, err := s.openVolume(s.ctx, sh, false)
+	if err != nil {
+		return nil, err
+	}
+	return volume.dir, nil
 }

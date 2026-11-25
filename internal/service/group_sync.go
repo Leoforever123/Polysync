@@ -229,12 +229,11 @@ func (s *Service) fetchGroupObjects(ctx context.Context, f *protocol.Framer, req
 }
 
 func (s *Service) groupSession(ctx context.Context, f *protocol.Framer, sh model.Share, member model.ShareMember, peer model.PairedDevice, client bool) error {
-	ctx, volume, err := s.openVolume(ctx, sh)
+	ctx, volume, err := s.openVolume(ctx, sh, true)
 	if err != nil {
 		return err
 	}
 	defer volume.dir.Close()
-	s.clearRootPause(sh.ID)
 	state, err := s.checkedGroupState(sh)
 	if err != nil {
 		return err

@@ -141,7 +141,7 @@ func (s *Service) previewWriteBack(ctx context.Context, sh model.Share) (writeBa
 	if err != nil {
 		return out, err
 	}
-	ctx, volume, err := s.openVolume(ctx, sh)
+	ctx, volume, err := s.openVolume(ctx, sh, false)
 	if err != nil {
 		return out, err
 	}

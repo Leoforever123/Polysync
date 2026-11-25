@@ -56,7 +56,8 @@ type ShareMember struct {
 }
 
 type Share struct {
-	RootID          string        `json:"rootId,omitempty"` // Local only. Never transmitted to peers.
+	RootID          string        `json:"rootId,omitempty"`              // Local only. Never transmitted to peers.
+	RetryOnReturn   bool          `json:"retryOnVolumeReturn,omitempty"` // Interrupted request on this device.
 	ReplicaID       string        `json:"replicaId,omitempty"`
 	LocalRole       string        `json:"localRole,omitempty"`
 	Members         []ShareMember `json:"members,omitempty"`

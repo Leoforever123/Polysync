@@ -16,6 +16,7 @@ import (
 
 	"polysync/internal/model"
 	"polysync/internal/protocol"
+	"polysync/internal/rootidentity"
 	"polysync/internal/syncer"
 )
 
@@ -69,7 +70,7 @@ func (s *Service) syncShareLocked(ctx context.Context, share model.Share, manual
 }
 
 func (s *Service) syncLegacyLocked(ctx context.Context, share model.Share, manual bool) error {
-	ctx, volume, err := s.openVolume(ctx, share)
+	ctx, volume, err := s.openVolume(ctx, share, true)
 	if err != nil {
 		return err
 	}
@@ -325,13 +326,12 @@ func (s *Service) handleConnection(ctx context.Context, connection *tls.Conn) {
 		return
 	}
 	_ = connection.SetDeadline(time.Now().Add(sessionTimeout))
-	ctx, volume, err := s.openVolume(ctx, share)
+	ctx, volume, err := s.openVolume(ctx, share, true)
 	if err != nil {
 		_ = writeSyncError(framer, "scan", err)
 		return
 	}
 	defer volume.dir.Close()
-	s.clearRootPause(share.ID)
 	nonce := randomNonce()
 	config := s.store.Config()
 	if err := framer.WriteJSON(protocol.Challenge{
@@ -506,6 +506,14 @@ func (s *Service) learnPeer(share model.Share, hello protocol.Hello, remote net.
 func (s *Service) syncFailed(shareID string, err error) error {
 	if errors.Is(err, errRootPaused) {
 		return s.noteRootPause(shareID, true, err)
+	}
+	// An unplug can first surface as a raw read or fsync error. Recheck the
+	// enrolled location before recording an ordinary failure or losing the
+	// interrupted request on a manually synchronized folder.
+	if sh, ok := s.store.Share(shareID); ok && sh.RootID != "" && s.ctx.Err() == nil {
+		if unavailable := rootidentity.Check(sh.Path, sh.RootID); unavailable != nil {
+			return s.noteRootPause(shareID, true, unavailable)
+		}
 	}
 	if errors.Is(err, errRemoteRootPaused) {
 		s.updateStatus(shareID, func(status *model.RuntimeStatus) {

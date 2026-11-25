@@ -100,6 +100,48 @@ func BindRoot(root *os.Root) (string, error) {
 	return string(data), err
 }
 
+// RemoveUnusedBinding rolls back an app-created directory after an invitation
+// failed. Leave folders containing any user files or a different marker intact.
+func RemoveUnusedBinding(path, saved string) error {
+	var id identity
+	if err := json.Unmarshal([]byte(saved), &id); err != nil || !validToken(id.Token) {
+		return errors.New("同步文件夹身份记录无效")
+	}
+	root, err := Open(path, saved)
+	if err != nil {
+		return err
+	}
+	dir, err := root.Open(".")
+	if err != nil {
+		root.Close()
+		return err
+	}
+	held, err := dir.Stat()
+	names, readErr := dir.Readdirnames(2)
+	if errors.Is(readErr, io.EOF) {
+		readErr = nil
+	}
+	err = errors.Join(err, readErr, dir.Close())
+	marker := markerPrefix + id.Token
+	if err != nil || len(names) != 1 || names[0] != marker {
+		return errors.Join(err, root.Close())
+	}
+	err = root.Remove(marker)
+	if err := errors.Join(err, root.Close()); err != nil {
+		return err
+	}
+	// Windows needs the directory handle closed before removal. The final
+	// nonrecursive remove also refuses a new file arriving during cleanup.
+	live, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(held, live) {
+		return ErrDifferentRoot
+	}
+	return os.Remove(path)
+}
+
 // Check never creates or changes the directory or its identity marker.
 func Check(path, saved string) error {
 	root, err := Open(path, saved)
