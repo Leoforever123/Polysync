@@ -126,11 +126,16 @@ h2 { margin: 0; font-size: 25px; letter-spacing: -.035em; }
 .share-name { font-size: 19px; font-weight: 720; letter-spacing: -.02em; margin-bottom: 7px; }
 .share-path { color: var(--soft-ink); font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .share-meta { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-top: 24px; padding-top: 17px; border-top: 1px solid #e8e8e2; }
+.share-feedback { min-width: 0; }
+.last-success { display: block; margin: 3px 0 0 16px; color: var(--soft-ink); font-size: 11px; }
+.last-success[hidden] { display: none; }
 .status { display: flex; align-items: center; gap: 8px; color: var(--soft-ink); font-size: 12px; min-width: 0; }
 .status span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #929b97; }
 .status.synced .status-dot { background: #3c9b6f; }
-.status.syncing .status-dot { background: var(--amber); }
+.status.paused span:last-child, .status.waiting span:last-child { white-space: normal; overflow-wrap: anywhere; }
+.status.paused, .status.waiting { align-items: flex-start; line-height: 1.45; }
+.status.paused .status-dot, .status.waiting .status-dot, .status.syncing .status-dot { background: var(--amber); }
 .status.error .status-dot { background: var(--red); }
 .auto-control { display: flex; align-items: center; gap: 8px; color: var(--soft-ink); font-size: 12px; white-space: nowrap; }
 .switch { width: 35px; height: 20px; position: relative; display: inline-block; }
@@ -243,6 +248,7 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .button.small { border-radius: 999px; padding: 8px 14px; }
 .button.ghost:hover { background: var(--green-soft); }
 .button:disabled { cursor: default; }
+.sync-button[aria-disabled="true"] { cursor: default; opacity: .55; transform: none; box-shadow: none; }
 .hero { position: relative; min-height: 210px; padding: 28px 0 32px; grid-template-columns: 1fr 350px; gap: 48px; align-items: center; }
 .hero > div:not(.hero-art):not(.device-card) { position: relative; z-index: 1; }
 h1 { font-family: inherit; font-size: clamp(34px, 3.8vw, 46px); line-height: 1.32; font-weight: 500; letter-spacing: -.045em; text-wrap: balance; }

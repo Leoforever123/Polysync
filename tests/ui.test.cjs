@@ -54,6 +54,40 @@ test("folder names and paths are escaped and pending/syncing actions disabled", 
   assert.match(a.run("shareCard(folder)"), /sync-button" disabled/);
 });
 
+test("a paused folder shows the current reason ahead of the last successful sync", () => {
+  const a = app();
+  const share = { id: "photos", name: "照片", state: "active", autoSync: true,
+    status: { state: "paused", lastSync: "2026-11-23T10:00:00Z", message: "请接回原磁盘 <Photos>" } };
+  a.context.folder = share;
+  assert.equal(a.run("statusText(folder)"), "请接回原磁盘 <Photos>");
+  let html = a.run("shareCard(folder)");
+  assert.match(html, /sync-button" aria-disabled="true" aria-describedby="[^"]+">已暂停/);
+  assert.match(html, /aria-describedby="share-status-photos"/);
+  assert.match(html, /role="status" aria-live="polite" aria-atomic="true"/);
+  assert.match(html, /请接回原磁盘 &lt;Photos&gt;/);
+  assert.match(html, /class="last-success">上次同步成功 · /);
+  assert.match(html, /auto-toggle" type="checkbox" checked/);
+  share.status.message = "";
+  assert.equal(a.run("statusText(folder)"), "文件夹同步已暂停");
+  share.status.state = "synced";
+  html = a.run("shareCard(folder)");
+  assert.doesNotMatch(html, /aria-disabled="true"|已暂停/);
+  assert.match(html, /立即同步/);
+});
+
+test("a waiting peer keeps manual sync available and explains the last success", () => {
+  const a = app();
+  const share = { id: "remote", name: "远端资料", path: "/work", state: "active",
+    status: { state: "waiting", lastSync: "2026-11-23T10:00:00Z", message: "对端的文件夹已暂停，正在等待对端接回原盘。" } };
+  const html = a.run("shareCard(" + JSON.stringify(share) + ")");
+  assert.doesNotMatch(html, /sync-button" disabled/);
+  assert.match(html, /对端的文件夹已暂停/);
+  assert.match(html, /class="last-success">上次同步成功 · /);
+  assert.equal(a.run("statusText(" + JSON.stringify(share) + ")"), share.status.message);
+  share.status = { state: "idle", lastSync: share.status.lastSync, message: "原盘已接回" };
+  assert.match(a.run("statusText(" + JSON.stringify(share) + ")"), /^原盘已接回 · /);
+});
+
 test("unpair confirmation escapes names, explains scope and preserves focused device controls", () => {
   const a = app();
   a.context.device = { id: 'peer', name: '<img src=x onerror=bad>', online: false };

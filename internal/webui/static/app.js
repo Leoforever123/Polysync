@@ -126,13 +126,36 @@ function statusText(share) {
   const status = share.status || {};
   if (status.state === "syncing") return status.message || "同步中…";
   if (status.state === "error") return status.message || "同步失败";
-  if (status.lastSync && !status.lastSync.startsWith("0001-")) return `${share.localRole && status.message ? status.message : "已同步"} · ${formatTime(status.lastSync)}`;
-  return "等待首次同步";
+  if (status.state === "paused") return status.message || "文件夹同步已暂停";
+  if (status.state === "waiting") return status.message || "等待对端恢复同步";
+  if (hasLastSync(status)) return `${status.message && status.message !== "同步完成" ? status.message : "已同步"} · ${formatTime(status.lastSync)}`;
+  return status.message || "等待首次同步";
+}
+
+function hasLastSync(status) {
+  return Boolean(status?.lastSync && !String(status.lastSync).startsWith("0001-"));
+}
+
+function lastSuccessfulSync(status) {
+  return (status.state === "paused" || status.state === "waiting") && hasLastSync(status) ? `上次同步成功 · ${formatTime(status.lastSync)}` : "";
+}
+
+function shareStatusID(id) {
+  return `share-status-${String(id).replace(/[^a-zA-Z0-9_-]/g, "-") || "folder"}`;
+}
+
+function syncButtonState(share) {
+  const mode = share.status?.state;
+  if (share.state !== "active") return { label: "立即同步", disabled: true };
+  if (mode === "paused") return { label: "已暂停", paused: true };
+  if (mode === "syncing") return { label: "同步中", disabled: true };
+  return { label: "立即同步" };
 }
 
 function shareCard(share) {
   const status = share.status || { state: "idle" };
   const active = share.state === "active";
+  const sync = syncButtonState(share);
   const saving = state.autoSaving.has(share.id);
   const automatic = saving ? state.autoSaving.get(share.id) : share.autoSync;
   const members = share.members || [];
@@ -141,8 +164,14 @@ function shareCard(share) {
   const review = share.localRole === "follower" && members.some(member => member.writeBackPending)
     ? '<button class="button small review-writeback">查看待回传修改</button>' : "";
   const canInvite = (active || share.state === "disconnected") && share.localRole !== "follower";
+  const statusID = shareStatusID(share.id);
+  const syncAttributes = [
+    sync.disabled ? "disabled" : "",
+    sync.paused ? 'aria-disabled="true"' : "",
+    `aria-describedby="${escapeHTML(statusID)}"`
+  ].filter(Boolean).join(" ");
 
-  return `<article class="share-card" data-share-id="${escapeHTML(share.id)}"><div class="share-header"><div class="folder-icon"></div><div class="card-actions"><button class="button small sync-button" ${!active || status.state === "syncing" ? "disabled" : ""}>${status.state === "syncing" ? "同步中" : "立即同步"}</button>${canInvite ? '<button class="button small invite-member">添加设备</button>' : ""}<button class="icon-button more edit-button" aria-label="${escapeHTML(share.name)}的同步设置">•••</button></div></div><div class="share-name">${escapeHTML(share.name)}</div><div class="share-path" title="${escapeHTML(share.path)}">${escapeHTML(share.path)}</div>${group}${review}<div class="share-meta"><div class="status ${escapeHTML(status.state || "idle")}"><i class="status-dot"></i><span>${escapeHTML(statusText(share))}</span></div><label class="auto-control"><span>自动</span><span class="switch"><input class="auto-toggle" type="checkbox" ${automatic ? "checked" : ""} ${!active || saving ? "disabled" : ""}><i class="slider"></i></span></label></div></article>`;
+  return `<article class="share-card" data-share-id="${escapeHTML(share.id)}"><div class="share-header"><div class="folder-icon"></div><div class="card-actions"><button class="button small sync-button" ${syncAttributes}>${sync.label}</button>${canInvite ? '<button class="button small invite-member">添加设备</button>' : ""}<button class="icon-button more edit-button" aria-label="${escapeHTML(share.name)}的同步设置">•••</button></div></div><div class="share-name">${escapeHTML(share.name)}</div><div class="share-path" title="${escapeHTML(share.path)}">${escapeHTML(share.path)}</div>${group}${review}<div class="share-meta"><div class="share-feedback"><div class="status ${escapeHTML(status.state || "idle")}" id="${escapeHTML(statusID)}" role="status" aria-live="polite" aria-atomic="true"><i class="status-dot" aria-hidden="true"></i><span>${escapeHTML(statusText(share))}</span></div><small class="last-success"${lastSuccessfulSync(status) ? "" : " hidden"}>${escapeHTML(lastSuccessfulSync(status))}</small></div><label class="auto-control"><span>自动</span><span class="switch"><input class="auto-toggle" type="checkbox" ${automatic ? "checked" : ""} ${!active || saving ? "disabled" : ""}><i class="slider"></i></span></label></div></article>`;
 }
 
 function renderShareList(shares) {
@@ -158,17 +187,37 @@ function renderShareList(shares) {
     const html = shareCard(share);
     let card = existing.get(share.id);
     existing.delete(share.id);
-    if (card && card._html !== html && card.contains(document.activeElement)) {
-      const status = card.querySelector(".status");
-      status.className = "status " + (share.status?.state || "idle");
-      status.lastElementChild.textContent = statusText(share);
-    } else if (!card || card._html !== html) {
-      const template = document.createElement("template");
-      template.innerHTML = html;
-      const next = template.content.firstElementChild;
-      if (card) card.replaceWith(next);
-      next._html = html;
-      card = next;
+    if (!card || card._html !== html) {
+      const structure = shareCard({ ...share, status: undefined });
+      if (card && (card._structure === structure || card.contains(document.activeElement))) {
+        // The status region must stay mounted for assistive technology to
+        // announce a change. Keep keyboard focus when a folder goes offline.
+        const status = card.querySelector(".status");
+        const message = statusText(share);
+        status.className = "status " + (share.status?.state || "idle");
+        if (status.lastElementChild.textContent !== message) status.lastElementChild.textContent = message;
+        const previous = card.querySelector(".last-success");
+        const recency = lastSuccessfulSync(share.status || {});
+        if (previous.textContent !== recency) previous.textContent = recency;
+        previous.hidden = !recency;
+        const button = card.querySelector(".sync-button");
+        const sync = syncButtonState(share);
+        if (!button.hasAttribute("data-requesting")) {
+          if (button.textContent !== sync.label) button.textContent = sync.label;
+          button.disabled = Boolean(sync.disabled);
+          if (sync.paused) button.setAttribute("aria-disabled", "true");
+          else button.removeAttribute("aria-disabled");
+        }
+        card._html = card._structure === structure ? html : null;
+      } else {
+        const template = document.createElement("template");
+        template.innerHTML = html;
+        const next = template.content.firstElementChild;
+        if (card) card.replaceWith(next);
+        next._html = html;
+        next._structure = structure;
+        card = next;
+      }
     }
     if (list.children[index] !== card) list.insertBefore(card, list.children[index] || null);
   });
@@ -574,13 +623,16 @@ document.addEventListener("click", async event => {
   if (target.closest(".edit-button") && card) return openEdit(card.dataset.shareId);
   const sync = target.closest(".sync-button");
   if (sync && card) {
+    if (sync.disabled || sync.getAttribute("aria-disabled") === "true") return;
+    sync.setAttribute("data-requesting", "");
     sync.disabled = true;
-    sync.textContent = "正在启动…";
+    sync.textContent = "正在请求…";
     try {
       await api(`/api/shares/${encodeURIComponent(card.dataset.shareId)}/sync`, { method: "POST", body: "{}" });
-      toast("已开始同步");
+      toast("已请求同步");
     } catch (error) { toast(error.message, true); }
     finally {
+      sync.removeAttribute("data-requesting");
       sync.disabled = false;
       sync.textContent = "立即同步";
       await refresh(true);
